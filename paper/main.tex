@@ -1,0 +1,59 @@
+% main.tex -- minimal wrapper for the Method and Experiments draft.
+% Content source: ../METHOD_NEURIPS.md (English body + 中文要點 per subsection), converted 2026-10-17.
+% Corrections of 2026-10-17 (../PROBLEMS_AND_SOLUTIONS.md, 「更正 2026-10-17」) are applied in the .tex wording;
+% each place is marked with a "% NOTE:" comment, and the Markdown draft keeps the old wording with a 更正 mark.
+% Project rules: one sentence per line; English only in typeset text; 中文要點 as % comments under each heading;
+% every open item uses \tbd{...}; numbers are copied from the Markdown draft, not recomputed.
+% Build (when a TeX system is available): pdflatex main && bibtex main && pdflatex main && pdflatex main
+\documentclass{article}
+
+% NeurIPS style: put the official neurips_2026.sty in this folder and uncomment the next line.
+% It is not included here; do not substitute a hand-made copy.
+% If the style loads natbib itself, keep the natbib line below option-free (or pass the style's nonatbib option).
+% \usepackage[preprint]{neurips_2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+% Software without a year in our docs is cited by alias, so author-year citations do not print an empty year.
+\defcitealias{opencc}{OpenCC}
+
+% Open items stay visible in the PDF.
+\newcommand{\tbd}[1]{\textcolor{red}{[TBD: #1]}}
+
+% Chinese strings: #1 is the original (kept in the source, not typeset), #2 is what pdflatex prints (romanisation or gloss).
+% With a CJK-capable build (e.g. xelatex + xeCJK) this can be redefined as \renewcommand{\zh}[2]{#1}.
+\newcommand{\zh}[2]{#2}
+
+\title{Fine-tuning a local language model to imitate one person's Traditional-Chinese chat style from a few hundred replies, with validated stylometric rulers as the training and acceptance signal}
+\author{\tbd{authors}}
+\date{}
+
+% Main claim (METHOD_NEURIPS.md): an LLM can be fine-tuned, from a few hundred reply turns, to imitate a specific
+% person's Traditional-Chinese (Taiwan colloquial) chat style, and this can be shown with rulers that were themselves
+% validated on the same kind of text; the rulers are an intermediate step, not the contribution.
+%
+% Status (METHOD_NEURIPS.md, 2026-10-13): Method drafted from the validated parts of the pipeline (PIPELINE_SPEC.md);
+% Experiments has two tiers (Tier 1 runnable now, Tier 2 planned). Numbers are from Experiments 1-4
+% (PIPELINE_TECH_SURVEY.md, FORMAL_DISTANCE_EXPERIMENT.md); every number that depends on training is \tbd.
+% Bibliography: refs.bib; entries carrying note = {... bibliography to verify} are incomplete in our docs.
+
+\begin{document}
+
+\maketitle
+
+% Sections 1--2 (Introduction, Related work) are not drafted yet.
+% Numbering starts at 3 so that section numbers match METHOD_NEURIPS.md.
+\setcounter{section}{2}
+
+\input{method}
+\input{experiments}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

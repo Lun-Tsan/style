@@ -1,0 +1,240 @@
+% method.tex -- Section 3 (Method), converted from METHOD_NEURIPS.md §3 on 2026-10-17.
+% One sentence per line. Each subsection's 中文要點 is the comment block directly under its heading.
+% "% NOTE:" comments mark places where the wording differs from the Markdown draft, or where docs and code disagree.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Problem setting}
+\label{sec:setting}
+% 中文要點:
+% 單位是回合(同人、同日、間隔 ≤ 30 分);樣本 = 前 12 個回合 → T 的回合;
+% 目標是生成的回覆被「分得出 T 與 S 的尺」分不出來,同時不離題。
+% 資料三個特性:短、符號類內容多且隨時期變、只有兩位作者。
+
+We are given the message log of one two-party chat between a \emph{target} person T and a \emph{partner} S, exported from LINE.
+A \textbf{turn} is a maximal run of messages by one speaker on one day with gaps of at most 30 minutes between consecutive messages; a \textbf{segment} is a maximal run of turns with gaps of at most 6 hours.
+The data form a sequence of segments, each a sequence of turns $(u_1, \dots, u_m)$ with speaker labels in $\{T, S\}$.
+
+A \textbf{sample} is a pair $(c, y)$ where $y$ is a turn by T and $c$ is the context: the up-to-12 preceding turns of the same segment (both speakers), rendered as text.
+The goal is a conditional generator $p_\theta(y \mid c)$ whose replies, under the conditions of the held-out period, cannot be told from T's own replies by rulers that \emph{can} tell T from S, while staying on topic.
+% NOTE: the Markdown draft says the small training set "rules out the data regimes of prior persona work (thousands to
+% tens of thousands of messages)". That conflicts with the 500-message IMPersona setting quoted in §4.1, so it is rephrased.
+The training set is small: a few hundred samples (here about 700 after filtering), close to the smallest setting reported by IMPersona (500 messages; their largest uses 13K) \citep{shi2025impersona}.
+
+Three properties of the data drive the design.
+(i) Turns are short: the median turn has 16 characters, so a single turn carries little stylistic evidence.
+(ii) The log is a tutoring chat, so a large and time-varying share of the characters (0.2--0.8 depending on the period) are code, formulas or symbols rather than conversation.
+(iii) Only two authors exist, so classical multi-author stylometry has no reference population.
+
+\subsection{Overview}
+\label{sec:overview}
+% 中文要點:
+% 三階段:尺(先驗證、再校準)→ SFT LoRA → 尺排序的 DPO。驗收用另一組尺。
+
+The method has three stages (\tbd{Figure 1: pipeline overview}).
+\begin{enumerate}
+\item \textbf{Rulers} (\S\ref{sec:rulers}): a small set of stylometric measures on bags of turns, each validated on T and S before use, with calibrated thresholds; plus interpretable feature tolerance bands.
+\item \textbf{Supervised adaptation} (\S\ref{sec:sft}): LoRA fine-tuning \citep{hu2022lora} of a 4B base or instruct model on the samples, with loss only on T's turns.
+\item \textbf{Ruler-guided preference optimisation} (\S\ref{sec:pref}): sample candidates for each training context, rank them with the calibrated ruler inside interpretable behaviour cells, and run DPO \citep{rafailov2023dpo} on the resulting pairs against a fixed reference, with a capped score and content constraints.
+\end{enumerate}
+Evaluation (\S\ref{sec:eval}) uses \emph{different} rulers from training: an independent discriminator trained on the test period, a model-free compression distance, feature-distribution checks and a blind judgement by T.
+
+\subsection{Rulers: validated stylometric distances on bags of turns}
+\label{sec:rulers}
+% 中文要點:
+% 主尺 = 字元 1–3-gram 作者 LM 的 LLR(袋內加總;門檻按袋大小校準、單回合分數用等張回歸校準);
+% 交叉檢查 = NCD;Cosine Delta 暫列。
+% 16 個可解釋特徵各有 T 的容忍帶(5–95 百分位),兩側都扣。
+% (更正 2026-10-17:Markdown 原稿的中文要點寫 14 個;正確是 16 個,見 persona/rulers/features.py 的 FEATURES。)
+% 三個有效性檢查:k=10 判定 ≥ 0.95、k=50 的 within<cross ≥ 95%、內容固定子集 AUC ≥ 0.90。
+% 單回合 ≤ 0.80,所以逐候選的分數只能當排序訊號。
+
+\paragraph{Preprocessing for the rulers.}
+Turns are kept as text with newlines between messages and single placeholder characters for stickers, images and emoticons.
+A turn is flagged \emph{symbol-like} if, after emoticon placeholders are inserted, it contains any of \verb!; { } ( ) = < > # [ ] _ \ / * + & | % ^ $ @! or a backtick, a URL, or a programming keyword.
+Flagged turns are excluded from ruler fitting and scoring and are not used as targets; in contexts they are replaced by a placeholder.
+This rule was chosen empirically (Exp.~4): without it, within-person variation in symbol content exceeds the between-person difference, and the five distances we tested all fail the validity check below; a density-based rule that keeps formulas and bracketed fragments is weaker.
+
+\paragraph{Author language model (primary ruler).}
+Let $q_T$ and $q_S$ be character 1--3-gram multinomial models with add-one smoothing fitted on T's and S's training turns \citep[cf.][]{peng2003language}.
+For a text $x$ the score is the log-likelihood ratio $\ell(x) = \log q_T(x) - \log q_S(x)$ (plus the log prior ratio); for a bag $B$ of turns, $\ell(B) = \sum_{x \in B} \ell(x)$.
+This is the likelihood-ratio statistic for ``written by T'' under the two fitted models (the analogue of a matched filter), and at each bag size tested in Exp.~3 it was more accurate than the formal distances we compared.
+Because $\ell(B)$ is a sum, its decision threshold depends on $|B|$; using 0 is miscalibrated (0.877 accuracy at $k = 50$ against 1.000 calibrated).
+We therefore tune a threshold per bag size on out-of-fold training bags from five contiguous date blocks, and map single-turn scores to calibrated log-odds by isotonic regression on the same out-of-fold scores, fitted with the pool-adjacent-violators (PAV) algorithm of \citet{ayer1955empirical}.
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md S10): Brümmer & du Preez 2006 is a speaker-detection evaluation paper,
+% not a forensic one, and C_llr is not a calibration loss by itself; the calibration part is C_llr - C_llr^min.
+% The definition of C_llr^min should still be checked in the full text (PROBLEMS_AND_SOLUTIONS.md, last line).
+We report the log-likelihood-ratio cost $C_{llr}$ introduced by \citet{brummer2006application} for the evaluation of speaker detection, which reflects discrimination and calibration together.
+The calibration part alone is $C_{llr} - C_{llr}^{\min}$, where $C_{llr}^{\min}$ is the cost of the same scores after an optimal monotone (PAV) transformation; \tbd{report $C_{llr}^{\min}$ next to $C_{llr}$ for the single-turn calibration}.
+
+\paragraph{Model-free cross-check.}
+Normalised compression distance \citep[NCD;][]{cilibrasi2005clustering} is computed with zlib against ten reference bags of about 3,000 characters per author; the bag score is $\mathrm{NCD}(B, S) - \mathrm{NCD}(B, T)$.
+NCD needs no vocabulary and was the most stable of our measures across periods (worst-block AUC 0.992 at $k = 50$), but its threshold does not transfer, so it is reported as AUC or pairwise accuracy only.
+
+\paragraph{Provisional formal distance.}
+Cosine Delta \citep{smith2011improving,evert2017understanding} is computed on the 300 most frequent 1--3-grams, with z-scores taken from 400 random training bags because there is no multi-author reference.
+It passes the validity check after filtering but depends on the reference draw; it is kept for reporting and will be replaced by a multi-author reference when such data exist (Tier~2).
+
+\paragraph{Interpretable features and tolerance bands.}
+% NOTE: the feature list follows FEATURES in persona/rulers/features.py (16 entries). The Markdown draft's list omits
+% sentence-final punctuation (end_punct) and calls the tilde feature an "ending"; the code counts messages that contain
+% a full-width or half-width tilde anywhere.
+Sixteen features are computed on the ruler population (non-symbol turns): sentence-final particles (two groups), full-width punctuation share, sentence-final punctuation, sticker rate, burst size, message length, messages containing a tilde (full-width or half-width), catchphrases (two groups), question rate, letter share, digit share, laughter, first person, and emoticons.
+For each feature the 5th--95th percentile over 1,000 training bags of T ($k = 50$) is the \textbf{tolerance band}.
+A bag of replies is penalised for leaving the band in either direction, so a generator that over-produces T's catchphrases is penalised as well as one that under-produces them.
+Features whose bag-level T-vs-S AUC is below 0.6 would be reported but not weighted; on our data each of the sixteen is above 0.6.
+The weighted feature distance uses weights proportional to each feature's discrimination (AUC minus 0.5) with $|z|$ capped at 5, so that near-constant rare features cannot dominate.
+
+\paragraph{Validity checks (pre-registered, rerun whenever preprocessing changes).}
+A measure may be used only if (a) on bags of $k = 10$ turns from the held-out period, calibrated attribution accuracy is at least 0.95; (b) on 1,000 random draws of training bags with $k = 50$, the cross-person distance exceeds both within-person distances in at least 95\% of draws, both when bags are drawn from the whole period and when all bags of a draw come from the same date block; (c) on the subset of short acknowledgement turns (content held fixed), out-of-fold single-turn AUC is at least 0.90.
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md §4): Min-max similarity is the Ruzicka index, not Bray-Curtis.
+% Bray-Curtis similarity is 2R/(1+R) for Min-max R, a monotone transform: rank-based results agree, values and thresholds do not.
+% Cite Bray & Curtis (1957) only where Bray-Curtis itself is named.
+% NOTE: the values in this paragraph are Exp. 4. The stage-1 rerun with the emoticon whitelist (reports/ruler_validation.md;
+% handover.md §4 item 3) gives slightly different values for (b) at k = 50 and k = 25; pick one source before submission.
+After filtering, the author LM reaches 1.000 [0.99, 1.00] at $k = 10$ and 0.944 on the content-controlled subset; Cosine Delta and NCD pass (b) at 0.96--0.97; Min-max similarity $\sum_i \min(x_i, y_i) / \sum_i \max(x_i, y_i)$ (the Ruzicka index) is at 0.94 (Exp.~4).
+At $k = 25$ the distances fall short of (b) (0.73--0.89), so validity is claimed at $k = 50$ and attribution at $k = 10$--25, and the two are kept separate.
+
+\paragraph{What the rulers cannot do.}
+% NOTE: 0.80 is the tuned single-turn value of Exp. 4 (PIPELINE_SPEC.md: 0.77 / tuned 0.80 / AUC 0.885);
+% handover.md §4 item 1 quotes tuned 0.81 (stage-1 rerun, 0.807 in reports/ruler_validation.md).
+Single-turn attribution accuracy is 0.80 or below for each measure we tested, and 0.66--0.72 on seven-character turns.
+Per-candidate scores are therefore used in training only as a noisy ranking signal (\S\ref{sec:pref}), not as point judgements.
+
+\subsection{Supervised adaptation}
+\label{sec:sft}
+% 中文要點:
+% 一個 prompt 函式,訓練推論共用;一則一行、每行有標記;目標含整個回合 + EOS(學連發);不用 chat template。
+% LoRA r8 α16 全 linear;dev 選 epoch 後用全訓練期重訓;放金絲雀句稽核記憶。
+
+\paragraph{Format.}
+Each sample is rendered by one function used identically in training and inference: one message per line, prefixed with \zh{我:}{\textit{w\v{o}}:} (``me'', for T) or \zh{對方:}{\textit{du\`{\i}f\={a}ng}:} (``the other party'', for S); the target is all lines of T's turn followed by an end-of-sequence token.
+The model therefore also learns \emph{whether to send another message} (burst size, median 2 for T vs 1 for S), which the rulers treat as a feature.
+No chat template is used, for either the base or the instruct checkpoint, so the base-vs-instruct comparison is not confounded by templates and the prompt at inference cannot drift from the prompt in training.
+Contexts are truncated from the oldest turn to 512 tokens; the loss is computed only on target tokens, and a unit test asserts that the first target token is included.
+
+\paragraph{Fine-tuning.}
+We use LoRA \citep{hu2022lora} with rank 8, $\alpha = 16$, dropout 0.05 on all linear projections of Qwen3.5-4B (base and instruct), bf16, learning rate $10^{-4}$ with cosine decay, effective batch 8, sequence length 768, and 3--5 epochs depending on the subset size, with the epoch chosen on a time-ordered development split (last 15\% of the training period) and the final model retrained on the full training period with that epoch count.
+Three fictitious canary sentences are added to the training set to audit memorisation.
+
+\subsection{Ruler-guided preference optimisation}
+\label{sec:pref}
+% 中文要點:
+% 每前文 8 候選;分數 = 校準 log-odds,封頂在真實回覆的 95 百分位(只封上界;
+% 更正 2026-10-17:原稿稱「典型帶」並引 Meister et al. 2023,但那是解碼時逐 token、雙側的帶,只能寫「受其啟發」);
+% 約束 = 離題門檻(bge-m3 只做這件事)、抄襲、用語外漏;
+% 行為格 = 長度 × 貼圖 × 連發 × 語氣詞,chosen 要在真實回覆的格內且 > +δ,rejected < −δ
+% (更正 2026-10-17:分格 + 每格留最佳借自 MAP-Elites;「取真實回覆所在格」是我們加的規則,MAP-Elites 沒有目標分布);
+% 沒有 chosen 就用真實回覆(DITTO,≤ 50%)。
+% DPO β 0.1、參考固定、以驗收尺提早停止,不用 KL 懲罰。先報 best-of-8。
+
+\paragraph{Candidates.}
+For each training context $c$ the SFT model draws $n = 8$ candidates (temperature 0.8, top-p 0.95).
+Each candidate $y$ receives a calibrated log-odds score $s(y)$ from the author LM, capped at the 95th percentile of the scores of T's real replies.
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md S26): the draft called the cap a "typicality band" and cited
+% Meister et al. 2023 as if it were the same object. Their band is per token, two-sided and on one model's information
+% content; ours is a one-sided cap on whole-reply author log-odds. The code clamps the score: min(raw, cap) in persona/pairs.py.
+The cap is one-sided: a reply that scores as more T-like than 95\% of T's own replies gains nothing from the excess, on the view that such a reply is a caricature rather than an imitation.
+The cap is inspired by locally typical sampling \citep{meister2023locally}, but the quantity differs.
+Locally typical sampling keeps, at each decoding step, the tokens whose information content is close to the conditional entropy of one model, which is a two-sided criterion applied per token.
+Our cap is an upper bound only, and it applies to the author log-odds (T against S) of a whole reply.
+
+\paragraph{Constraints.}
+A candidate can be \emph{chosen} only if it is on topic (its bge-m3 cosine to the real reply exceeds the 90th percentile of cosines between unrelated real replies), is not a verbatim copy (no common substring of 12 or more characters with any training target), and contains no simplified-Chinese or Mainland-term leakage (the OpenCC converter \citepalias{opencc} in s2twp mode leaves it unchanged).
+% NOTE: no bib entry exists for bge-m3 or Qwen3.5 in our docs; add them before submission.
+Semantic embeddings are used \emph{only} for this on-topic gate.
+On our data they separate on-topic from off-topic replies (AUC 0.94), but they do not see style (within-person vs cross-person difference 0.018), and in our check they did not separate an affirmative from a negative reply: the cosine between \zh{可以啊}{\textit{k\v{e}y\v{\i} a}} (``sure'') and \zh{不行耶}{\textit{b\`{u} x\'{\i}ng ye}} (``no way'') is 0.77.
+We therefore do not use them to score style.
+
+\paragraph{Behaviour cells.}
+Candidates are binned by four interpretable descriptors: length bucket, sticker or not, number of messages in the burst, and sentence-final particle or not.
+The \emph{target cell} of a context is the cell of T's real reply.
+The chosen reply is the highest-scoring qualifying candidate with $s > +\delta$ in the target cell.
+If the target cell holds no qualifying candidate, the neighbouring cells (same sticker flag, length bucket $\pm 1$) are searched, then any cell, and the level used is recorded and reported; with eight candidates an exact cell hit is rare.
+The rejected reply is the lowest-scoring candidate in any cell with $s < -\delta$, where $\delta = \log 3$ in calibrated log-odds.
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md S25): the draft said this "quality-diversity construction (MAP-Elites)
+% makes the chosen set follow T's empirical distribution over behaviours rather than collapsing onto the single safest
+% reply, which is the known failure mode of preference optimisation on dialogue". MAP-Elites has no target distribution,
+% and "the known failure mode" had no source; rewritten below.
+The cell structure borrows the archive of MAP-Elites \citep{mouret2015illuminating}, in which user-chosen descriptors partition the space and the best solution found so far is kept in each cell.
+MAP-Elites itself is an evolutionary search that mutates the stored elites in order to fill as many cells as possible with high-performing solutions, and it has no target distribution over cells; taking the chosen reply from the cell of T's real reply is our addition.
+The intent is that the chosen set follows T's empirical distribution over behaviours, to the extent that exact or neighbouring cell hits occur, instead of concentrating on a single safe reply, the loss of diversity that diversity-aware preference methods such as DivPO \citep{lanchantin2025divpo} also address.
+If no candidate qualifies as chosen, the real reply is used, as in DITTO \citep{shaikh2025ditto}, limited to half of the pairs; if no candidate qualifies as rejected, the context yields no pair.
+
+\paragraph{Objective.}
+We use standard DPO \citep{rafailov2023dpo} with $\beta = 0.1$ against the frozen SFT model as reference, for one epoch, with LoRA on top of the merged SFT weights.
+There is no KL penalty beyond the implicit one; instead, training stops when the \emph{evaluation} rulers (\S\ref{sec:eval}), computed on a development sample at 100-step intervals, stop improving.
+% NOTE: handover.md §6 item 5: DPO early stopping is currently evaluated only at the end of an epoch; persona/train_dpo.py
+% accepts eval_every=100 but does not use it yet. The sentence above describes the design, not the current code.
+This follows the observation that KL penalties did not prevent over-optimisation in reward-model fine-tuning \citep{gao2023scaling}, and the Goodhart principle that an optimised measure stops measuring: the training ruler and the acceptance rulers are different objects.
+
+\paragraph{Best-of-$n$ before DPO.}
+Before DPO we report best-of-8 selection with the same score and constraints, in the style of RAFT \citep{dong2023raft}.
+It needs no training and indicates how far the ruler alone can move the outputs.
+
+\subsection{Evaluation protocol}
+\label{sec:eval}
+% 中文要點:
+% 驗收尺 = 測試期重訓的獨立分辨器(報 AUC,附底線與靈敏度)、NLL、NCD、特徵帶、JSD、離題率、銜接、抄襲、外漏、多樣性、金絲雀。
+% 四個對照組(真實、打亂的真實、S、底模)把指標的座標定出來。
+% 本人盲判用序貫停止(更正 2026-10-17:是「每題後看 Clopper–Pearson 95% 區間是否整個在 0.65 一側」的反覆區間規則,
+% 不是 Wald 1945 的 SPRT;每題都看,實際錯誤率會高於名目的 5%)。
+% 三條驗收線預先登記。
+
+\paragraph{Independent discriminator.}
+The acceptance ruler is not the training ruler.
+On the held-out period we train a fresh character-n-gram discriminator between T's real replies and a system's replies to the same contexts (5-fold out-of-fold), a classifier two-sample test in the sense of \citet{lopezpaz2017revisiting}, and report its AUC on single turns (D-AUC$_1$) and on bags of 10 (D-AUC$_{10}$).
+% NOTE: 0.885 is the single-turn AUC of the training-period author LM on the filtered test turns (Exp. 4; PIPELINE_SPEC.md).
+% The control run of 2026-10-13 with the test-period discriminator measured real T vs real S at 0.76 (k = 10: 1.00) and
+% real vs real at 0.46 (handover.md §4 item 8). Decide which value defines the sensitivity line.
+Two controls fix the scale: the \emph{noise floor} (real vs real, expected 0.5) and the \emph{sensitivity} (real T vs real S, 0.885 single-turn after filtering).
+A system is read as ``closer to T than S is'' when its D-AUC is below the sensitivity value, and as indistinguishable when its interval covers the floor.
+Because the summed discriminator score drifts with bag size, bag-level results are reported as AUC or calibrated, not with a fixed threshold.
+Folds are assigned by reply string, so an identical reply cannot be in a training fold and a test fold at once; the shuffled-real control, which must sit at 0.5 by construction, verifies this (a per-context split let the discriminator memorise strings and gave 0.08).
+
+\paragraph{Other automatic measures.}
+% NOTE: rarefaction still needs a source (PROBLEMS_AND_SOLUTIONS.md S27).
+The other automatic measures are: held-out negative log-likelihood of T's real replies under the model (a fit measure that needs no auxiliary model); the NCD score; the number of the 16 features inside T's tolerance band and the Jensen--Shannon divergence \citep{lin1991divergence} between generated and real feature distributions; on-topic rate; a coherence score $\log p(y \mid c) - \log p(y)$ under the base model, after the MMI objective of \citet{li2016diversity}; copy rate; OpenCC leakage per 100 characters; diversity (distinct-2 \citep{li2016diversity} and the Hill number of order 1 \citep{hill1973diversity} after rarefaction to equal sample sizes); and canary recall.
+
+\paragraph{Controls that define the axes.}
+Each measure is also computed for the real replies (ceiling), for \emph{shuffled} real replies (T's replies reassigned to other contexts: T's own style with the wrong content, which separates style measures from content measures), for S's real replies (negative control) and for the untrained base model.
+
+\paragraph{Human judgement.}
+T performs a blind two-alternative test (real vs system reply for the same context, ``which one did I write?'') and a preference test (best fine-tuned vs best prompting system, ``which one is more like me?'').
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md S17): the draft called this rule a sequential test citing Wald 1945
+% (SPRT). The text below describes what persona/human_eval.py does. Code vs text:
+% - sprt_stop(n_correct, n, p0=0.65, max_n=100) returns stop/'below' when the upper Clopper-Pearson 95% bound is < p0,
+%   stop/'above' when the lower bound is > p0, and otherwise stops only at n >= max_n. Despite its name it is not an SPRT.
+% - score() evaluates the rule once on the answers it is given; checking after each item is left to whoever runs the
+%   session (PIPELINE_SPEC.md §6.2 says the check is made item by item, and also calls the rule "SPRT").
+% - score() applies the same p0 = 0.65 to kind-B (preference) items, while acceptance line (3) uses 0.60 for preference,
+%   so the preference test has no stopping threshold of its own.
+% - make_items() takes a priority_sids list and puts those items first; computing where the rulers disagree
+%   (query-by-committee) is not in human_eval.py.
+For the blind test, after each answered item we compute the exact (Clopper--Pearson) 95\% interval for T's accuracy, and we stop as soon as the interval lies entirely below or entirely above 0.65, or after 100 items.
+This is a repeated confidence-interval rule, not the sequential probability ratio test of \citet{wald1945sequential}, which fixes two simple hypotheses (for example accuracy 0.5 against 0.65) and error rates $\alpha$ and $\beta$ in advance and stops when the cumulative log-likelihood ratio crosses one of two boundaries.
+Because the interval is inspected after each item, the probability of stopping on the wrong side of 0.65 is higher than the nominal 5\%; \tbd{estimate the actual error rate of this rule, or replace it by a Wald SPRT}.
+Items where the automatic rulers disagree are placed at the front of the queue (query-by-committee).
+
+\paragraph{Acceptance lines (pre-registered; may only be tightened after the baselines are seen).}
+\begin{enumerate}
+\item D-AUC$_1 \le 0.75$ and D-AUC$_{10} \le 0.90$, and a paired-bootstrap improvement over the best prompting baseline whose interval excludes 0.
+\item A band count not below that of the real held-out replies minus one (the real replies sit inside 12 of the 15--16 defined bands because of period drift, so an absolute threshold would be stricter than the person), diversity at least 80\% of real, copy rate at most 2\%, and leakage not above the real replies.
+\item T's blind accuracy at most 0.65 and preference for the fine-tuned system at least 0.60.
+\end{enumerate}
+Passing (1) and (2) but not (3) is reported as a failure of the rulers, not a success of the model.
+
+\paragraph{Statistics.}
+We use three training seeds per system; a paired bootstrap over test contexts (2,000 resamples) for each system comparison \citep{bergkirkpatrick2012empirical}; Clopper--Pearson intervals for single-turn accuracies; and a turn-level bootstrap for bag-level accuracies, because overlapping bags are not independent.
+
+\subsection{Privacy and consent}
+\label{sec:privacy}
+% 中文要點:
+% 全程本機;去識別化;S 的訊息只當前文與對照作者,發表前要同意;權重不公開;只報統計與 ≤ 8 字的 n-gram。
+
+All processing is local.
+Speaker names are replaced by role labels; phone numbers, identity numbers, addresses and e-mail addresses are replaced by placeholders with hand-written Taiwan-specific patterns.
+S's messages are used only as context and as the contrast author for ruler validation; S's consent is required before any publication that reports statistics derived from S's messages.
+Adapter weights are treated as derived personal data and are not released.
+The paper reports only aggregate statistics and n-grams of at most eight characters.
