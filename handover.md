@@ -51,6 +51,7 @@
 **對照組(146 個測試前文,10/13)**
 8. 獨立分辨器(測試期重訓的 NB,fold 按字串分):真人 vs 真人底線 0.46(k=10 袋 0.39),真人 T vs 真人 S 0.76(k=10 袋 1.00)。打亂的真實回覆(風格對、內容錯):風格指標與真實完全相同、離題率只剩 0.10 —— 這組對照證明風格指標和內容指標是分開的。
 9. 真人 T 在測試期自己也只有 12.0 / 15.3 個特徵落在訓練期的容忍帶內(時期漂移),所以驗收線 2 定義成「不低於 C-real − 1」,不是絕對數字。
+   **待確認 2026-10-17**:特徵帶只用文字回合配、驗收的袋卻含純貼圖回覆,C-real 的貼圖特徵因此永遠在帶外;12.0 / 15.3 至少有一部分是這個不一致,不全是時期漂移(`CODE_REVIEW_2026-10-17.md` #4)。C-S 的 Band 6.6 與 `base_s0_quick` 的 NLL 1.851 也受 #11、#1 影響。
 
 **程式與速度(10/13)**
 10. `persona/` 套件全部寫完,30 個測試全過;新套件**逐格重現**實驗 4 的數字。
@@ -83,10 +84,12 @@
 3. OpenCC 未裝(`opencc-python-reimplemented`),外漏指標目前回 None。
 4. 線性注意力核心未裝;1 s/step 若可接受就不用裝(Windows 上不一定裝得起來)。
 5. DPO 的提早停止目前只在 epoch 結尾評估,還沒接上「每 N 步用驗收尺看 dev 生成」。
+   **更正 2026-10-17**:DPO 目前完全沒有評估(`eval_every` 沒被使用),存的是最後一步(`CODE_REVIEW_2026-10-17.md` #8)。
 6. 實驗 4 與 stage-1 的所有數字都是**單次執行、未獨立重算**;實驗 1–3 有另一個 agent 重寫重算過。發表前要重算。
-7. 離線推理引入的文獻(Spearman–Brown、Wald SPRT、Brümmer & du Preez Cllr、PAV、概化理論、合成控制、MAP-Elites、典型取樣、Hill 數、Bray–Curtis、負向選擇、Shewhart)全部標了「書目待查證」,寫論文前要回原文查。
+7. 離線推理引入的文獻(Spearman–Brown、Wald SPRT、Brümmer & du Preez Cllr、PAV、概化理論、合成控制、MAP-Elites、典型取樣、Hill 數、Bray–Curtis、負向選擇、Shewhart)全部標了「書目待查證」,寫論文前要回原文查。**2026-10-17**:12 項書目已依索引紀錄查證(年份作者無誤,Spearman 與 Brown 是兩篇;完整書目在 `PROBLEMS_AND_SOLUTIONS.md` 文末),內容不符的 9 處已加「更正」(Spearman–Brown 預測信度不是準確率、Cllr 不等於校準損失、Min–max ≠ Bray–Curtis 只是單調等價、合成控制 / MAP-Elites / 典型取樣 / 負向選擇只能當類比、DiD 不是概化理論特例、CUSUM 是 Page 1954),另 `METHOD_NEURIPS.md` §3.6 的「區間落在 0.65 一側就停」不是 SPRT;還沒做:7 處 *(bib to verify)* 未進 survey 參考文獻、全文未讀、口語尺度 / 稀疏化 / 單類別分類的出處待查。
 8. S 的同意(發表前)。
 9. Tier 2(多人、多作者參照、熟人盲測、貼圖編號)只有需求,沒有資料。
+10. **程式審查(2026-10-17)**:`CODE_REVIEW_2026-10-17.md`,18 項;正式實驗前要修的有 #1 #2 #3 #4 #11 #12 #14,還沒動手。
 
 ## 7. 檔案地圖(本機 `Desktop/tmp/qwen_chat_analysis/`;GitHub `Lun-Tsan/style`)
 
@@ -122,6 +125,7 @@
 - **能做**:讀/改文件與程式、查證「書目待查證」清單、補單元測試、審 `persona/` 的程式、寫論文其他章節、把 `METHOD_NEURIPS.md` 改成 LaTeX。
 - **不能做**:跑 `stage1`、訓練、評估、任何需要 `chathistory.txt` 的測試(`tests/test_data.py` 等會因找不到檔案而失敗;只有 `test_prompt`、`test_train`、`test_rulers.test_stats_helpers` 不需要資料)。
 - **值得交給雲端的一件事**:寫一個**合成 LINE 匯出產生器**(假的兩人、假的訊息,格式同 `persona/parse_line.py` 的說明),讓資料層與尺的測試在沒有真資料時也能跑;產生器不可含任何真實訊息。
+  **2026-10-17 已完成**:`persona/synth.py`;`python tests/run_tests.py --synth` 在雲端跑 23 個測試全過(缺 torch 的 `test_eval`、`test_train`、`test_mask` 記為 SKIP),`PERSONA_SYNTH=1 python -m persona.stage1` 整個跑完、輸出在 `runs/synth/`。合成資料上單回合 NB 0.83 / 調門檻 0.82 / AUC 0.89、k=10 0.99,形狀接近真資料,但只用來驗證程式,不支持任何關於真人的主張。
 - 要開雲端 session 前,這個資料夾得先變成 git repo 並推到 GitHub;`.gitignore` 已經寫好(排除 `chathistory.txt`、`runs/`、`*.jsonl`、adapter 權重)。**推之前請再檢查一次 `git status` 裡沒有原文。**
 
 ## 10. 建議的下一步順序
