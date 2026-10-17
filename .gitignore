@@ -1,0 +1,22 @@
+# private chat data and anything derived from it that contains message text
+chathistory*.txt
+persona/local_speakers.json
+runs/
+*.jsonl
+**/adapter_best/
+**/items.jsonl
+**/key.json
+*.safetensors
+*.bin
+*.pt
+
+# python / tooling
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# notebooks and scratch output
+*.ipynb_checkpoints
+out/
