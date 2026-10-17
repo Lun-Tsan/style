@@ -32,6 +32,18 @@ python -m persona.run_eval --system sft --run sft_instruct_all_s0 --dpo dpo_inst
 # 5. 本人盲判題組(persona.human_eval.make_items / score)
 ```
 
+### 沒有真資料時(雲端、CI):合成匯出
+
+`synth.py` 產生假的兩人 LINE 匯出(片語是這個檔案自己寫的,不含任何真實訊息;風格差異的方向照 stage-1 報告),並回傳解析器必須重現的計數(訊息、系統行、回合、段落、各期文字回合)。`PERSONA_SYNTH=1` 時 config 換成假名字,所有輸出改寫到 `runs/synth/`,不會蓋掉真的 `reports/`。
+
+```bash
+python tests/run_tests.py --synth          # 資料層與尺的測試跑在合成匯出上;缺 torch/transformers 的模組記為 SKIP
+PERSONA_SYNTH=1 python -m persona.stage1   # 整個 stage 1 → runs/synth/reports/
+python -m persona.synth --seed 0           # 只產生匯出 → runs/synth/chathistory_synth.txt(+ .truth.json)
+```
+
+合成資料只驗證程式(計數、規則、尺的管線能跑、方向對),不能拿來支持任何關於真人的數字。
+
 每個訓練類指令都有 `--quick`(0.8B、十幾個樣本)可先冒煙。
 
 ## 模組
@@ -39,6 +51,7 @@ python -m persona.run_eval --system sft --run sft_instruct_all_s0 --dpo dpo_inst
 | 模組 | 做什麼 |
 |---|---|
 | `parse_line` `turns` `normalize` `flag_symbols` `split` `samples` `prompt` | LINE 匯出 → 回合 → 段落 → 樣本;符號類回合規則;唯一的 prompt 組裝器 + loss 遮罩 |
+| `synth` | 合成兩人匯出(測試與冒煙用,不含真實訊息) |
 | `rulers/author_lm` `profiles` `ncd` `features` `calibrate` `validate` | NB 作者 LM、距離、NCD、16 個可解釋特徵與容忍帶、等張校準、E1/E3/E4/E5 驗證 |
 | `modeling` `data_sft` `train_sft` | 模型載入(Windows GQA patch)、LoRA、SFT 迴圈、金絲雀稽核 |
 | `generate` `embed` `pairs` `make_pairs` `train_dpo` | 取樣、抄襲/外漏檢查、bge-m3 離題門檻、行為格配對、自寫 DPO |

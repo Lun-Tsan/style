@@ -21,7 +21,7 @@ def _validation():
 
 def test_validation_thresholds():
     res = _validation()
-    verdict = V.judge(res)
+    verdict = V.judge(res, ref_k50=None if C.SYNTH else C.EXP4_LOOSE_K50)   # experiment-4 numbers are real-data only
     assert verdict["pass"], verdict["checks"]
 
 

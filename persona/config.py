@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -17,6 +18,15 @@ _loc = json.load(open(_LOCAL, encoding="utf-8")) if _LOCAL.exists() else {}
 CHAT_PATH = Path(_loc.get("chat_path", str(PROJECT / "chathistory.txt")))
 TARGET = _loc.get("target", "T")      # T: the person to imitate
 PARTNER = _loc.get("partner", "S")    # S: contrast author for the rulers (consent needed before publication)
+
+# synthetic mode (PERSONA_SYNTH=1): the fake export of persona/synth.py with fake names; every output goes under
+# runs/synth/ so the real reports/ and runs/ are never overwritten
+SYNTH = os.environ.get("PERSONA_SYNTH") == "1"
+if SYNTH:
+    RUNS = PROJECT / "runs" / "synth"
+    REPORTS = RUNS / "reports"
+    CHAT_PATH = RUNS / "chathistory_synth.txt"
+    TARGET, PARTNER = "林老師 Lin", "小陳"
 SPEAKERS = (PARTNER, TARGET)
 CODE = {TARGET: "T", PARTNER: "S"}    # role codes used in every report (never the display names)
 ROLE = {TARGET: "我", PARTNER: "對方"}

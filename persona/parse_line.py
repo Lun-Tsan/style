@@ -81,6 +81,12 @@ def parse(lines, speakers):
 
 
 def load(path: Path = C.CHAT_PATH):
+    if C.SYNTH:
+        from .synth import write
+        write(path)                 # deterministic, so regenerating each time never leaves a stale export
+    elif not Path(path).exists():
+        raise FileNotFoundError(f"{path} not found; without the private export use PERSONA_SYNTH=1 "
+                                f"(tests: python tests/run_tests.py --synth)")
     lines = read_lines(path)
     found = detect_speakers(lines)
     if set(found) != set(C.SPEAKERS):
