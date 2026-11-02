@@ -52,10 +52,12 @@
 8. 獨立分辨器(測試期重訓的 NB,fold 按字串分):真人 vs 真人底線 0.46(k=10 袋 0.39),真人 T vs 真人 S 0.76(k=10 袋 1.00)。打亂的真實回覆(風格對、內容錯):風格指標與真實完全相同、離題率只剩 0.10 —— 這組對照證明風格指標和內容指標是分開的。
 9. 真人 T 在測試期自己也只有 12.0 / 15.3 個特徵落在訓練期的容忍帶內(時期漂移),所以驗收線 2 定義成「不低於 C-real − 1」,不是絕對數字。
    **待確認 2026-10-17**:特徵帶只用文字回合配、驗收的袋卻含純貼圖回覆,C-real 的貼圖特徵因此永遠在帶外;12.0 / 15.3 至少有一部分是這個不一致,不全是時期漂移(`CODE_REVIEW_2026-10-17.md` #4)。C-S 的 Band 6.6 與 `base_s0_quick` 的 NLL 1.851 也受 #11、#1 影響。
+   **2026-11-02 程式已改,真資料的數字還沒重算**:特徵帶、鑑別度、管制圖改用含純貼圖回合的母體(`persona/stage1.py:85-89`、`persona/data.py:27-36`);同時 C-S 改從訊息建(#11)、NLL 改算真實回覆(#1)、離題門檻改在訓練期配(#12)、多樣性稀疏化到 100 則(#13)。合成資料上 C-real 的 Band 從 13.7 升到 14.4(16 個特徵),方向和 #4 的推測一致。真資料的 12.0 / 15.3、C-S 的 6.6、`base_s0_quick` 的 1.851 要在本機重跑 `stage1` 與 `run_eval --system controls --overwrite` 後才有新值;在那之前,上面「時期漂移」的解釋與線 2「≥ C-real − 1」的理由仍待確認。
 
 **程式與速度(10/13)**
 10. `persona/` 套件全部寫完,30 個測試全過;新套件**逐格重現**實驗 4 的數字。
 11. Qwen3.5-4B(Instruct)LoRA SFT:10.1 GB VRAM、約 1 s/step(短前文);全量 3 epoch 估 5–15 分鐘。Qwen3.5 是混合線性注意力模型,沒裝 `flash-linear-attention` / `causal_conv1d` 時走 PyTorch 參考實作。
+    **待確認 2026-11-02**:「約 1 s/step」來自 `step_seconds`,它只量每步 4 個 micro-batch 中的最後一個加上參數更新(`persona/train_sft.py:130, :142`),所以一步的實際時間更長,5–15 分鐘的估計也可能偏低;`metrics.json` 新增的 `seconds`(整段牆鐘時間)下次跑完可以拿來重估。全部資料時,train+dev 重訓最多再加約 1.17 倍的訓練時間(797 / 679 個樣本)。
 
 **被推翻或更正過的說法(寫論文時不要再用)**
 - 10/03:「bge-m3 抓得到 可以啊 vs 不行耶」→ 錯,已更正。
@@ -85,11 +87,14 @@
 4. 線性注意力核心未裝;1 s/step 若可接受就不用裝(Windows 上不一定裝得起來)。
 5. DPO 的提早停止目前只在 epoch 結尾評估,還沒接上「每 N 步用驗收尺看 dev 生成」。
    **更正 2026-10-17**:DPO 目前完全沒有評估(`eval_every` 沒被使用),存的是最後一步(`CODE_REVIEW_2026-10-17.md` #8)。
+   **2026-11-02 已接上,GPU 上還沒跑過**:第 0 步、步數為 10 的倍數時(`C.DPO["eval_every"]`)與最後一步之後,在 60 個 dev 前文(`C.DPO["dev_eval_n"]`)上各生成 1 則,依 `symbol_share`、D-AUC₁₀、Band 選檢查點;SFT 的 `adapter_best` 用 train+dev 重訓過時,DPO 跑兩次以保留 dev,時間約加倍(`PIPELINE_SPEC.md` §10)。這個選法與 §5.4 的「D-AUC 不再下降就停」不同,正式 DPO 前要確認。
 6. 實驗 4 與 stage-1 的所有數字都是**單次執行、未獨立重算**;實驗 1–3 有另一個 agent 重寫重算過。發表前要重算。
 7. 離線推理引入的文獻(Spearman–Brown、Wald SPRT、Brümmer & du Preez Cllr、PAV、概化理論、合成控制、MAP-Elites、典型取樣、Hill 數、Bray–Curtis、負向選擇、Shewhart)全部標了「書目待查證」,寫論文前要回原文查。**2026-10-17**:12 項書目已依索引紀錄查證(年份作者無誤,Spearman 與 Brown 是兩篇;完整書目在 `PROBLEMS_AND_SOLUTIONS.md` 文末),內容不符的 9 處已加「更正」(Spearman–Brown 預測信度不是準確率、Cllr 不等於校準損失、Min–max ≠ Bray–Curtis 只是單調等價、合成控制 / MAP-Elites / 典型取樣 / 負向選擇只能當類比、DiD 不是概化理論特例、CUSUM 是 Page 1954),另 `METHOD_NEURIPS.md` §3.6 的「區間落在 0.65 一側就停」不是 SPRT;還沒做:7 處 *(bib to verify)* 未進 survey 參考文獻、全文未讀、口語尺度 / 稀疏化 / 單類別分類的出處待查。
 8. S 的同意(發表前)。
 9. Tier 2(多人、多作者參照、熟人盲測、貼圖編號)只有需求,沒有資料。
 10. **程式審查(2026-10-17)**:`CODE_REVIEW_2026-10-17.md`,18 項;正式實驗前要修的有 #1 #2 #3 #4 #11 #12 #14,還沒動手。
+    **2026-11-02**:18 項都處理了(17 項改程式,#18a 改 `PIPELINE_SPEC.md` §0);#1 #8 #9 #12 #15 #16 #17 需要模型的部分沒有在雲端執行。修完後的複查另找到 14 項,11 項已修。逐項狀態在 `CODE_REVIEW_2026-10-17.md` 文末。**待使用者決定**:(a) 盲判 SPRT 的無差異區要不要調嚴(現在真實正確率 0.70 的系統通過線 3 的機率 0.20,`PIPELINE_SPEC.md` §6.2);(b) DPO 選檢查點的規則(與 §5.4 不同);(c) 配對改用封頂後的原始 LLR 排序(超出審查的修法);(d) 子集 100 / 250 / 500 的重訓資料取法;(e) 題型 A 一組題目放幾個系統(146 個測試前文);(f) `symbol_share` 要不要門檻;(g) 驗收線的三個實作解讀(`PIPELINE_SPEC.md` §6.3)。
+11. **2026-11-02 要在本機重跑的**(依序;已存在的輸出目錄要加 `--overwrite`):`python tests/run_tests.py` → `python -m persona.stage1`(重產 `reports/feature_bands.json`,新寫 `reports/data_manifest.json`)→ `python -m persona.run_eval --system controls --overwrite` → 冒煙 `train_sft --quick`、`make_pairs --quick`、`train_dpo --quick`、`run_eval --system sft --run sft_quick_all_s0 --dpo dpo_sft_quick_all_s0_pairs_quick_s0 --quick`(`train_sft --quick` 不做重訓,要測重訓用 `--size 100`)→ `run_eval --system base` 與基準線(B1-200、B1-all 先跑,看記下的 prompt token 數)。2026-11-02 之前在本機產生的 SFT、配對、DPO、評估輸出與 `reports/eval_table.json` 的舊列是舊程式算的(原因列在 `CODE_REVIEW_2026-10-17.md` 文末)。
 
 ## 7. 檔案地圖(本機 `Desktop/tmp/qwen_chat_analysis/`;GitHub `Lun-Tsan/style`)
 
@@ -102,7 +107,7 @@
 | `FORMAL_DISTANCE_EXPERIMENT.md` | 實驗 3 的完整英文報告、兩輪審查、被推翻的第一版結論;§E 是實驗 4 | 查數字時 |
 | `PROBLEMS_AND_SOLUTIONS.md` | 19 個問題、43 個解法(跨領域:心理計量、序貫分析、雷達 CFAR、法庭科學 LR、免疫負向選擇、MAP-Elites、製程管制……),哪些進 v1 | 想改方法時 |
 | `persona/` + `persona/README.md` | 程式碼與執行順序 | 跑東西時 |
-| `tests/` | 30 個測試,`python tests/run_tests.py`(`--fast` 跳過需要尺驗證與 tokenizer 的) | — |
+| `tests/` | 30 個測試(2026-11-02 為 54 個,見 §9),`python tests/run_tests.py`(`--fast` 跳過需要尺驗證與 tokenizer 的) | — |
 | `reports/` | stage-1 產出:`data_stats.json`、`ruler_validation.json/.md`、`nb_calibration.json`、`feature_bands.json`、`eval_table.json`(對照組) | — |
 | `runs/` | 冒煙測試的產物(0.8B)與對照組輸出;**含原文,不外流** | — |
 | `scripts/` | 實驗 1–4 的原始腳本(`style_nb.py`、`formal_*.py`、`recheck_nocode.py`)與數字結果 | 重算時 |
@@ -126,11 +131,12 @@
 - **不能做**:跑 `stage1`、訓練、評估、任何需要 `chathistory.txt` 的測試(`tests/test_data.py` 等會因找不到檔案而失敗;只有 `test_prompt`、`test_train`、`test_rulers.test_stats_helpers` 不需要資料)。
 - **值得交給雲端的一件事**:寫一個**合成 LINE 匯出產生器**(假的兩人、假的訊息,格式同 `persona/parse_line.py` 的說明),讓資料層與尺的測試在沒有真資料時也能跑;產生器不可含任何真實訊息。
   **2026-10-17 已完成**:`persona/synth.py`;`python tests/run_tests.py --synth` 在雲端跑 23 個測試全過(缺 torch 的 `test_eval`、`test_train`、`test_mask` 記為 SKIP),`PERSONA_SYNTH=1 python -m persona.stage1` 整個跑完、輸出在 `runs/synth/`。合成資料上單回合 NB 0.83 / 調門檻 0.82 / AUC 0.89、k=10 0.99,形狀接近真資料,但只用來驗證程式,不支持任何關於真人的主張。
+  **2026-11-02**:不 import torch 的 `persona/text.py`、`persona/data.py` 拆出來之後,evaluate、pairs、human_eval、report 的測試(`test_eval`、`test_train`、`test_human`)也在雲端用合成資料跑:`python tests/run_tests.py --synth` 共 54 個測試,47 過、0 失敗、7 SKIP(`test_mask` 2 個缺 transformers、`test_train` 5 個缺 torch:DPO loss、基準線解析,以及 `token_batches` / DPO 選檢查點 / 執行目錄名的純函式測試,這三個用替身 torch 跑過一次)。生成、NLL、MMI、bge-m3、訓練這些要模型的路徑仍然只能在本機跑。
 - 要開雲端 session 前,這個資料夾得先變成 git repo 並推到 GitHub;`.gitignore` 已經寫好(排除 `chathistory.txt`、`runs/`、`*.jsonl`、adapter 權重)。**推之前請再檢查一次 `git status` 裡沒有原文。**
 
 ## 10. 建議的下一步順序
 
-1. 裝 OpenCC;決定要不要下載 Base。
+1. 裝 OpenCC;決定要不要下載 Base。(2026-11-02:先做 §6 第 11 點的重跑,並決定 §6 第 10 點列的待決定事項。)
 2. 跑 `run_eval --system base` 與 `--system baseline --kind zero`(各幾分鐘),把驗收線門檻鎖下來(只能調嚴)。
 3. SFT 資料量曲線(先 Instruct、3 種子),每跑完一個用 `run_eval --system sft` 看 NLL 與 D-AUC。
 4. 最佳 SFT → `make_pairs` → `train_dpo` → 評估。

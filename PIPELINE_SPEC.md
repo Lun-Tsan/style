@@ -20,12 +20,12 @@
 | 連發 | 一則訊息一行、每行都帶標記;目標 = 整個回合的所有行 + `<eos>` | 讓模型學「要不要再發一則」(S2);尺把 ⏎ 當特徵 |
 | 貼圖 / 圖片 / 影片 | `[貼圖]` `[圖片]` `[影片]` 當文字,可當目標 | LINE 匯出沒有貼圖編號,只能學何時發(S36) |
 | 符號類回合 | **寬鬆規則**(實驗 4)。不當目標、不進尺;前文中換成 `[程式碼/算式]`;套規則前先把顏文字換佔位符 | 實驗 4;S3、S42 |
-| 切分 | 目標回合日期 ≥ 2026-07-20 → test;train 內最後 15%(依時間)→ dev | 整段對話為單位;dev 只用來選 epoch 與校準 |
+| 切分 | 目標回合日期 ≥ 2026-07-20 → test;train 內最後 15%(依時間)→ dev | 整段對話為單位;dev 只用來選 epoch 與校準(**2026-11-02**:也用來選 DPO 的檢查點;選完 epoch 後 dev 併入 SFT 重訓,見 §10) |
 | 子集 | 100 / 250 / 500 / 全部,巢狀,時間上等距抽 | 各子集的時期組成相同 |
 | 底模 | Qwen3.5-4B **Base 與 Instruct 都跑**;兩者都用同一純文字格式,不套 chat template | 消除模板混淆;Flipping the Dialogue(S35) |
 | LoRA | r 8、α 16、dropout 0.05、全部 linear 層;lr 1e-4、cosine、warmup 3%、有效 batch 8、epoch 5 / 4 / 3 / 3(100 / 250 / 500 / 全部)、bf16、梯度檢查點、seq 768 | IMPersona + 文獻共識;attention-only 當消融 |
 | 解碼 | temperature 0.8、top-p 0.95、max 64 new tokens、停在 `\n對方:` 或 `<eos>`;評估 1 個樣本 / 前文 × 3 個種子 | — |
-| 訓練用的尺 | NB 作者 LM 的 LLR(等張校準)+ R1 特徵容忍帶 | 實驗 3、4;S10、S28 |
+| 訓練用的尺 | NB 作者 LM 的 LLR(等張校準)+ R1 特徵容忍帶。**更正 2026-11-02**(`CODE_REVIEW_2026-10-17.md` #18a):配對程式沒有用 R1 特徵帶(`rulers.features.feature_distance` 沒有被呼叫)。程式實際用的訓練尺 = NB 校準 log-odds(在原始 LLR 尺度封頂)+ 行為格(長度級距 × 貼圖 × 連發 × 語氣詞)+ 約束(bge-m3 離題、12 字抄襲、OpenCC 外漏);符號類與沒結束的候選不參加(§5.3、§10)。R1 特徵帶用在驗收尺(Band)與 DPO 在 dev 上選檢查點(§5.4、§10) | 實驗 3、4;S10、S28 |
 | 驗收用的尺 | 測試期重訓的獨立 NB(real vs generated)+ NCD + R1 分布 + 本人盲判 | 訓練尺 ≠ 驗收尺(S29) |
 | 偏好訓練 | 先 best-of-N(RAFT),再 DPO;**自寫 DPO**(不裝 trl);β 0.1、lr 5e-6、1 epoch;參考模型 = SFT 模型,固定 | Gao 2023;遮罩要自己控制 |
 | 配對 | 每個前文 8 個候選;chosen = 與真實回覆同一「行為格」且 LLR > +δ 的最高分者;rejected = LLR < −δ 的最低分者;沒有合格 chosen 時用真實回覆(DITTO),上限 50% | DIAL + DITTO + MAP-Elites(S25) |
@@ -90,7 +90,7 @@ persona/
 
 ### 2.5 `split` 🔧
 - `time_split(samples)`:目標回合日期 ≥ 2026-07-20 → test;其餘 train。前文可以含 test 日期之前的回合(那是推論時本來就看得到的歷史)。
-- `dev_split(train)`:train 依目標日期排序,最後 15% → dev。dev 用途:SFT 選 epoch、尺的門檻二次確認。**最終模型用 train+dev 以選定的 epoch 數重訓**,報告時註明。
+- `dev_split(train)`:train 依目標日期排序,最後 15% → dev。dev 用途:SFT 選 epoch、尺的門檻二次確認。**最終模型用 train+dev 以選定的 epoch 數重訓**,報告時註明。(**2026-11-02 已實作**:`train_sft` 階段 2,見 §10;子集 100 / 250 / 500 的重訓資料怎麼取待確認。)
 - `date_blocks(train, n=5)`:連續日期區塊,尺的 OOF 校準用(實驗 3、4 的做法)。
 - `nested_subsets(train, sizes=(100, 250, 500, None), seed)`:把 train 依時間排序,子集 n 取等距索引(`round(i * N / n)`),所以 100 ⊂ 250 ⊂ 500 ⊂ 全部不保證嚴格包含;改為:先取 100 等距,250 = 100 ∪ 再從剩餘等距取 150,以此類推(巢狀且時期均勻)。
 - 驗收:每個子集的「年-月」分布直方圖與全集的 JSD < 0.05;dev 與 train 無同段落樣本。
@@ -204,29 +204,31 @@ persona/
 - 驗收:`tests/test_mask.py`(§2.7);dev NLL 低於底模的 dev NLL;金絲雀 NLL 沒有降到明顯低於同長度真實句。
 
 ### 5.2 `generate` 🔧
-- `sample(model, prompts, n, seed)`:批次 16、temperature 0.8、top-p 0.95、max 64、停在 `\n對方:` / `<eos>` / 第 6 則;輸出去掉標記後的回合文字(多則以 `\n` 接)。
+- `sample(model, prompts, n, seed)`:批次 16、temperature 0.8、top-p 0.95、max 64、停在 `\n對方:` / `<eos>` / 第 6 則;輸出去掉標記後的回合文字(多則以 `\n` 接)。(**2026-11-02**:改成依 token 預算分批,一批最多 16 個 prompt;另記候選在 64 個新 token 內是否出現 eos(`finished`),只認 eos,比這裡的停止條件嚴;前文和 `prompt.encode` 一樣截到 512 token。見 §10。)
 - 後處理:OpenCC `s2twp` 比對前後差異 → `leak_chars`;LCS 與訓練目標 ≥ 12 字 → `copy=True`。
 - 用途:評估(n=1 × 3 種子)、B3(n=8)、DPO 候選(n=8,train 前文)。
 
 ### 5.3 `pairs.build(sft_model, train_samples, ruler) -> list[Pair]` 🔧(本方法的核心)
 1. 對每個 train 前文取 8 個候選(§5.2)。
-2. 分數 `s(c)` = 校準後 NB log-odds(§3.4),**上限** = T 真實回覆分數的 95 百分位(典型帶上界,S26):`s ← min(s, cap)`。
+2. 分數 `s(c)` = 校準後 NB log-odds(§3.4),**上限** = T 真實回覆分數的 95 百分位(典型帶上界,S26):`s ← min(s, cap)`。(**2026-11-02 實作後修改**:等張校準在原始 LLR 37.81 就到天花板 6.907,校準後分數的 95 百分位就是天花板,封頂沒有作用(`CODE_REVIEW_2026-10-17.md` #2)。改成在原始 LLR 上封頂:cap_raw = T 訓練回合 OOF 原始 LLR 的 95 百分位(`reports/`:51.28),`s = 校準(min(raw, cap_raw))`;挑 chosen / rejected 時用 min(raw, cap_raw) 排序、同分隨機。見 §10。)
 3. 約束(不滿足的候選不能當 chosen):
    - 離題:bge-m3 cos(候選, 真實回覆) 必須 > 「無關真實回覆 vs 真實回覆」的 cos 分布的 90 百分位(用 train 的隨機配對估;S19)。
    - 抄襲:`copy=True` 者排除(S30)。
    - 外漏:`leak_chars > 0` 者排除(S37)。
+   - **2026-11-02 新增**:符號類候選(`flag_symbols.is_symbol_turn`)與沒結束的候選(64 個新 token 內沒有 eos)不當 chosen 也不當 rejected(§10)。
 4. 行為格(MAP-Elites,S25):`cell(reply) = (長度級距 ∈ {≤5, 6–15, 16–40, >40 字}, 有無貼圖, 連發則數 ∈ {1, 2, ≥3}, 有無語氣詞)`;以**真實回覆**的格為目標格。
 5. chosen = 通過約束且 `s > +δ` 的候選中,**先找目標格內**的最高分者;目標格沒有就退到鄰格(貼圖旗標相同、長度級距 ±1),再沒有才任一格;所用層級記錄在 pair 裡並報統計(**2026-10-13 實作後修改**:冒煙測試 8 個候選只有 3/12 前文命中精確格,原規則產生 0 對)。rejected = 任一格內 `s < −δ` 的最低分候選;δ = log 3(校準後 log-odds;待第一次正式跑完視配對數調整,只能調大)。
 6. 沒有合格 chosen → chosen = 真實回覆(DITTO 式),標記 `ditto=True`;全部配對中 ditto 比例上限 50%,超過就隨機丟棄 ditto 配對到 50%。
 7. 沒有合格 rejected → 該前文不產生配對。
 8. 輸出統計(進論文附錄):每格候選數、通過約束比例、ditto 比例、chosen/rejected 的分數分布。
-- 驗收:chosen 集合的 R1 特徵分布與真實回覆的 JSD < 0.05(S27);rejected 的分數平均明顯低於 chosen(差 > 2δ)。
+- 驗收:chosen 集合的 R1 特徵分布與真實回覆的 JSD < 0.05(S27);rejected 的分數平均明顯低於 chosen(差 > 2δ)。(**2026-11-02**:兩項都只算非 DITTO 配對,DITTO 的 chosen 就是真實回覆;見 §10。)
 
 ### 5.4 `train_dpo` 🔧(自寫)
 - 參考模型:SFT(LoRA 合併後的權重,凍結);策略:在合併後權重上掛新 LoRA(同 §5.1 設定)。
 - 預先算一次參考模型對 chosen / rejected 的 logp(只算目標 token),存檔。
 - 損失:`−log σ(β[(logp_θ(c) − logp_ref(c)) − (logp_θ(r) − logp_ref(r))])`,β 0.1;lr 5e-6;1 epoch;micro 1 × accum 8。
 - 提早停止:每 100 步在 dev 前文取樣 64 則,算 **驗收尺**(§6)的 D-AUC 與 Band;D-AUC 不再下降就停(不用 KL 懲罰,S29;Gao 2023)。
+  **2026-11-02 實作與此不同**(§10):第 0 步、步數為 10 的倍數時(`C.DPO["eval_every"]`)與最後一步之後,在 60 個 dev 前文(`C.DPO["dev_eval_n"]`)上各生成 1 則;訓練跑完 1 epoch,再從這些評估中挑一個。這不是這裡登記的「不再下降就停」;正式 DPO 前要由使用者確認或改掉。
 - 驗收:`tests/test_dpo_loss.py` 用一個小例子驗證損失與 trl 公式一致(手算);訓練後 chosen 的 logp 相對 rejected 上升。
 
 ---
@@ -252,17 +254,26 @@ persona/
 
 - 全部指標對 C-real、C-shuf、C-S、C-base 都算一次,作為表格第一區(定義指標的座標)。
 - 統計:每個系統 3 個種子;系統間差異用**以測試前文為單位的配對 bootstrap**(2,000 次)報效果量與 95% CI;多重比較不校正但全部列出。
+- **2026-11-02**:符號類的生成回覆(`is_symbol_turn(reply_text(msgs))`)不進分辨器、NCD、Band、JSD、OnTopic、MMI、Copy、Leak、Div,比例另報 `symbol_share`(真實目標在資料層已排除符號類回合);Div 預設稀疏化到 100 則,回覆不到 100 則的系統另報和真實回覆在同一個 n 的比值;配對 bootstrap 在 `report.py`。見 §10。
 
 ### 6.2 本人盲判(`human_eval`)
 - 題型 A(真假辨識):同一前文,真實回覆 vs 系統回覆,隨機左右;本人選「哪個是我寫的」。SPRT 式停止:逐題累積,當正確率 95% CI 落在 0.65 的一側就停,最多 100 題(S17)。
+  **更正 2026-11-02**:上一句的規則逐題看一次 95% 區間,不是 SPRT;對 (n, k) 精確計算,真實正確率 0.65 時判「低於」的機率 0.120(名目 0.025;`CODE_REVIEW_2026-10-17.md` #5)。它留在程式裡當紀錄(`human_eval.ci_stop`),不再使用。現在的停止規則是 **Wald SPRT**(`human_eval.sprt_stop`,參數在 `config.HUMAN`):
+  - 題型 A:兩個簡單假設 p = 0.55 對 p = 0.75(0.65 兩側的無差異區),α = β = 0.05。n 題中選對 k 題時,對數概似比 Λ = k·ln(0.75/0.55) + (n − k)·ln(0.25/0.45);Λ ≥ ln((1 − β)/α) = ln 19 ≈ 2.94 停在「高於」,Λ ≤ ln(β/(1 − α)) ≈ −2.94 停在「低於」,否則繼續;到 100 題還沒碰到界線就停在「未定」。
+  - 題型 B:0.50 對 0.70,α = β = 0.05,最多 100 題。
+  - 系統各自一條序列,不合併;線 3 用停止時的點估計判(§6.3)。一個系統的題目用完時,如果還沒碰到界線、也還沒到 100 題,線 3 記為未定(`report.lines_from_human` 回 None,標 `more_items_needed`)。
+  - 操作特性(題型 A、最多 100 題,對 (n, k) 精確計算):真實正確率 0.70 的系統通過線 3 的機率 0.201(舊規則 0.173),平均 44 題停(舊規則 78 題);0.75 時 0.042(舊 0.025);0.60 時 0.821(舊 0.859);真實 0.65 時判「低於」0.463,落在無差異區內,這是設計允許的。題型 B 對稱:真實偏好 0.55 時通過的機率 0.201。
+  - **待使用者決定**(只能調嚴):要不要縮小無差異區。例:0.60 / 0.70 時,真實 0.70 的通過機率 0.163(平均約 82 題);再把上限放到 200 題是 0.081(約 113 題)。決定後寫回這裡與 `METHOD_NEURIPS.md` §3.6(該節還寫著舊規則)。
 - 題型 B(偏好):同一前文,系統 X vs 系統 Y(最佳 SFT/DPO vs 最佳 many-shot),本人選「哪個比較像我」。
-- 取樣:優先取三把尺(D-AUC、Band、NCD)意見分歧的前文(S18),其餘隨機補足。
-- 題目檔只含去識別化文字;答案與時間本機記錄。
+- 取樣:優先取三把尺(D-AUC、Band、NCD)意見分歧的前文(S18),其餘隨機補足。(**2026-11-02 實作**:分歧前文的清單用 `--priority` 傳入,程式不自己算;priority 只決定選哪些前文。一個前文只給一個系統(題型 A、B 都是,用種子打亂的區塊分配),同一前文與它的回覆最多出一題;出題依時間順序;題型 A 的前文裡,其他題的真實回覆顯示成 `我: [略]`;系統回覆缺的、空的或符號類的不出題,數目記在 `stats.json`。146 個測試前文分給 2 個系統時,一個系統最多 73 題,到不了 100 題,怎麼安排待決定。)
+- 題目檔只含去識別化文字;答案與時間本機記錄。(**2026-11-02**:題組只能寫在 `runs/` 底下;`score` 只印數字與系統名稱。)
 
 ### 6.3 三條驗收線(預先登記;看到 B0 / C-base 之後只能調嚴)
 1. **線 1 自動**:D-AUC₁ ≤ 0.75 且 D-AUC₁₀ ≤ 0.90(比 S 更難與 T 分開),且顯著優於最佳 many-shot(配對 bootstrap CI 不含 0)。
 2. **線 2 特徵**:Band(k=50 袋內落在 T 容忍帶的特徵數)**不低於 C-real 在同一組測試前文的 Band − 1**(C-real 本身只有 12.0 / 15.3,因為測試期相對訓練期有漂移;絕對門檻 12/14 會比真人還嚴),Div 不低於真實的 80%,Copy ≤ 2%,Leak 不高於 C-real。
 3. **線 3 本人**:題型 A 正確率 ≤ 0.65(停止時的點估計),題型 B 對最佳 many-shot 偏好 ≥ 0.60。
+- **2026-11-02 實作**(`report.acceptance`、`report.lines_from_human`,門檻在 `config.LINES`)。下面三點是實作時的解讀,**待使用者確認**:線 1 的「顯著優於」= D-AUC₁(系統)− D-AUC₁(最佳 prompting)的配對 bootstrap 95% CI 整個低於 0(只看 D-AUC₁);線 2 的 Div = distinct-2 與 Hill-1 都 ≥ 真實回覆在同一個回覆數下的 0.80 倍;線 3 在 100 題還沒碰到 SPRT 界線時用點估計判,題目用完時記為未定(§6.2)。`symbol_share` 沒有登記門檻。
+- **待確認 2026-11-02**:線 2 理由中的 12.0 / 15.3 是用只含文字回合的特徵帶算的;#4 修正後特徵帶含純貼圖回合,要在本機重跑 stage1 與 `run_eval --system controls` 再看這個理由(`CODE_REVIEW_2026-10-17.md` #4)。
 - 三條都過 = 成功;只過 1、2 = 「尺上像、人覺得不像」,要回頭檢查尺(Baumler 2026 的警訊);只過 3 = 尺太嚴或抓到取樣痕跡。
 
 ---
@@ -284,7 +295,7 @@ persona/
 
 ---
 
-## 8. 測試清單(`tests/`)— 已實作 30 個測試,2026-10-13 全部通過;對應關係見 §10
+## 8. 測試清單(`tests/`)— 已實作 30 個測試,2026-10-13 全部通過;對應關係見 §10(2026-11-02:54 個,見 §10 最後)
 1. `test_parse`:訊息數、回合數、段落數與既有數字一致。
 2. `test_placeholders`:往返可逆;白名單命中數。
 3. `test_symbol_rule`:E4 門檻(§2.4)。
@@ -317,13 +328,13 @@ persona/
 | `parse_line.py` `turns.py` `normalize.py` `flag_symbols.py` `split.py` `samples.py` `prompt.py` | 資料層 §2 | 15 個單元測試全過;回合數與實驗 1–4 一致(4,967 則 / 23 系統行 / 785·862·134·149) |
 | `rulers/` (`ngrams` `author_lm` `profiles` `ncd` `stats` `calibrate` `features` `validate`) | 尺 §3 | **逐格重現實驗 4**(E1/E3/E4 每個數字相同);v1 白名單規則 **PASS** 全部預登記門檻;等張校準 Cllr 1.77 → 0.60、Brier 0.176 → 0.130 |
 | `stage1.py` | 資料統計、尺驗證、校準、特徵帶 → `reports/` | 102 秒 |
-| `modeling.py` `data_sft.py` `train_sft.py` | LoRA SFT §5.1(自寫迴圈、cosine、梯度檢查點、金絲雀稽核) | 0.8B 冒煙 4 步 OK;**4B:10.1 GB VRAM、約 1 s/step(短前文)**,估全量 3 epoch 約 5–15 分鐘 |
+| `modeling.py` `data_sft.py` `train_sft.py` | LoRA SFT §5.1(自寫迴圈、cosine、梯度檢查點、金絲雀稽核) | 0.8B 冒煙 4 步 OK;**4B:10.1 GB VRAM、約 1 s/step(短前文)**,估全量 3 epoch 約 5–15 分鐘(**待確認 2026-11-02**,見本節最後的「計時」) |
 | `generate.py` `embed.py` | 取樣、抄襲檢查、OpenCC 外漏(未裝 → None)、bge-m3 離題門檻 | 離題門檻 0.590(null 90 百分位) |
-| `pairs.py` `make_pairs.py` | §5.3 配對(行為格階梯) | 0.8B 冒煙:12 前文 → 12 對(ditto 4),chosen 2.65 / rejected −2.91,chosen-vs-real 特徵 JSD 0.045 |
+| `pairs.py` `make_pairs.py` | §5.3 配對(行為格階梯) | 0.8B 冒煙:12 前文 → 12 對(ditto 4),chosen 2.65 / rejected −2.91,chosen-vs-real 特徵 JSD 0.045(兩者都含 DITTO 配對,`CODE_REVIEW_2026-10-17.md` #10) |
 | `train_dpo.py` | 自寫 DPO(參考 logp 預算、單模型) | 0.8B 冒煙 OK(step 0 loss = log 2,如預期) |
-| `evaluate.py` `run_eval.py` | 驗收尺 §6 + 對照組 | **對照組(146 測試前文)**:C-real D-AUC₁ 0.50、底線 0.46 ± 、靈敏度 0.76(k=10:1.00);C-shuf 風格指標 = C-real、離題率 0.10;C-S D-AUC₁ 0.76、Band 6.6 vs 12.0 |
+| `evaluate.py` `run_eval.py` | 驗收尺 §6 + 對照組 | **對照組(146 測試前文)**:C-real D-AUC₁ 0.50、底線 0.46 ± 、靈敏度 0.76(k=10:1.00);C-shuf 風格指標 = C-real、離題率 0.10;C-S D-AUC₁ 0.76、Band 6.6 vs 12.0(**2026-11-02**:#4、#11、#12、#13 改了 Band 的母體、C-S、離題門檻、多樣性,這些數字要重跑 `run_eval --system controls`) |
 | `baselines.py` | B0/B1/B2(chat template、thinking 關) | 解析器單元測試;尚未在 4B 上跑 |
-| `human_eval.py` | 盲判題組 + SPRT 停止 | 停止規則單元測試 |
+| `human_eval.py` | 盲判題組 + SPRT 停止(**更正 2026-11-02**:當時的規則逐題看 95% 區間,不是 SPRT,`CODE_REVIEW_2026-10-17.md` #5;現在是 Wald SPRT,§6.2) | 停止規則單元測試 |
 | `tests/` | 30 個測試(`python tests/run_tests.py`,`--fast` 跳過慢的) | 全過 |
 
 **實作時改掉的設計**(都已寫回 §5.3 / §3.3 / §6):行為格階梯;特徵距離改鑑別度加權 + |z| 封頂;分辨器 fold 按字串分配(C-shuf 對照組抓到了原本的字串記憶漏洞:D-AUC 0.08 → 0.50)。
@@ -332,5 +343,58 @@ persona/
 - `Qwen/Qwen3.5-4B-Base` **不在 HF 快取**(只有 Instruct 的 `Qwen/Qwen3.5-4B`、0.8B、2B、9B);要跑 Base vs Instruct 得先下載(~8 GB)。
 - OpenCC 未安裝 → Leak 指標目前回 None;要裝 `opencc-python-reimplemented`。
 - Qwen3.5 是混合線性注意力模型,沒裝 `flash-linear-attention` / `causal_conv1d` 時用 PyTorch 參考實作(正確但慢);Windows 上這兩個套件不一定裝得起來,先用實測速度判斷是否需要。
-- 正式實驗(§7 步 3–7)尚未跑:B0 / C-base 跑完才鎖驗收線門檻;DPO 的提早停止(用驗收尺)只在 epoch 結尾評估,還沒接上 dev 生成。
+- 正式實驗(§7 步 3–7)尚未跑:B0 / C-base 跑完才鎖驗收線門檻;DPO 的提早停止(用驗收尺)只在 epoch 結尾評估,還沒接上 dev 生成。**更正 2026-11-02**:當時 DPO 完全沒有評估(`eval_every` 沒被使用,`CODE_REVIEW_2026-10-17.md` #8);2026-11-02 已接上 dev 評估,見下。
 - 實驗 4 與 stage-1 的數字都還是單次執行,未獨立重算。
+
+### 2026-11-02:程式審查後的修改
+
+依 `CODE_REVIEW_2026-10-17.md`(#1–#18 與文末的複查)。行號是 2026-11-02 工作樹的行號。需要模型或 GPU 的部分沒有在雲端執行(清單與本機重跑順序在 `CODE_REVIEW_2026-10-17.md` 文末);2026-11-02 之前在本機產生的 `runs/` 輸出與 `reports/eval_table.json` 的列是舊程式的結果。
+
+**資料層**
+- `text.py` / `data.py` 拆分(commit 2df8fa7):回覆文字、抄襲檢查、外漏計數移到不 import torch 的 `text.py`(外漏改用 difflib 對齊);`load_all` 移到 `data.py`(`stage1.load_all` 舊名保留)。evaluate、pairs、human_eval、report 因此能在沒有 torch 的機器上測。
+- 資料清單:stage1 最後寫 `reports/data_manifest.json`(切分常數,以及它們產生的回合、樣本、子集計數;只有數字,`stage1.py:101`)。`data.load_all()` 發現資料和清單不同就停,訊息指出最早不同的鍵(`data.py:51-93`)。真資料的 `reports/` 還沒有這個檔。
+- 特徵帶的母體(#4):特徵帶、鑑別度、管制圖改用含純貼圖回合的非符號訓練回合(`stage1.py:85-89`),和驗收的袋一樣;純貼圖回合歸入同日期的日期區塊(`data.py:27-36`),文字回合的區塊不變,所以 NB 的 OOF 不受影響。NB、profile、NCD 尺仍只用文字回合。合成資料上 C-real 的 Band 13.7 → 14.4(16 個特徵);真資料要重跑 stage1。
+
+**SFT(#9、#17;§2.5)**
+- 階段 1 在 train − dev 上訓練,dev NLL 最低的 epoch 存成 `adapter_devsel`;階段 2 重新載入底模、掛新的 LoRA,在 train + dev 上訓練同樣的 epoch 數,存成 `adapter_best`(`train_sft.py:96-166, :199-219`;`C.SFT["retrain_full"]`;`--no-retrain` 跳過,`--quick`、`--measure` 也不做)。全部資料時,階段 2 的訓練時間最多約為階段 1 的 1.17 倍(797 / 679 個樣本)。
+- 子集 100 / 250 / 500 的階段 2 用 train + dev 上以同樣巢狀、時間等距方式抽的同大小子集(`train_sft.py:50-65`),資料量曲線上的樣本數維持 100 / 250 / 500。**待確認**:另一種讀法是「子集 + 整個 dev」,會多出 118 個晚期樣本。
+- 金絲雀稽核改在存下來的 `adapter_best` 上做(`train_sft.py:78-94, :220-222`);階段 2 之後 dev 不再是保留資料,另記 `canary_devsel`(階段 1 的 adapter)與 `dev_items_trained`。
+
+**生成(#15、#16;複查 R2-5、R2-6)**
+- 依 token 預算分批:prompt 由長到短排;一批在 (prompt 數 + 1) × (最長 prompt + 64) × n ≤ 12,000 時才再加一個,最多 16 個(`generate.py:11-57`)。n = 8、prompt 約 300 token 時一批 4 個(原本 16),`make_pairs` 會變慢;VRAM 夠的話可以調大 `token_budget`。基準線在生成前記下 prompt token 數的最小 / 中位 / 最大(`baselines.py:87-112`)。
+- `finished`:續寫在 64 個新 token 內出現 eos(或 pad)才算結束(`generate.py:27-57, :68-77`)。這比 §5.2 嚴:用 `\n對方:` 結束回合但沒有 eos 的續寫也算沒結束。真資料跑過 make_pairs 後要看 `stats.json` 的 `cand_unfinished`。
+- 生成的 prompt 和 `prompt.encode` 一樣,從最舊的前文回合開始丟,直到 ≤ 512 token(`generate.generation_prompt`,`generate.py:60-65`;基準線 `baselines.py:43-46`)。之前生成用的是不截斷的前文,所以前文超過 512 token 的樣本,舊的 make_pairs / run_eval 輸出與現在不同。
+
+**配對(#2、#3、#10、#16;§5.3)**
+- 封頂改在原始 LLR 尺度:cap_raw = T 訓練回合 OOF 原始 LLR 的 95 百分位(`reports/`:51.28,5.1% 的 T 回合高於它),分數 = 校準(min(raw, cap_raw))(`pairs.py:72-89`)。等張校準在 raw 37.81 就到天花板 6.907,只看分數仍分不出封頂與不封頂,所以挑 chosen / rejected 改用 min(raw, cap_raw) 排序,差距 1e-9 以內的同分用種子隨機挑(`pairs.py:92-97, :144-147`)。**待確認**:這個排序超出審查的修法;要照 §5.3 的原公式就改回 `pairs.py:147`,那樣「分數無上限」消融會和主實驗相同。
+- OOF 陣列和訓練回合要逐位對齊(個數與說話者),對不齊就停(`pairs.py:76-79`):重跑 stage1 時 `ruler_validation.json` 要來自同一份資料。
+- 符號類候選與沒結束的候選不當 chosen 也不當 rejected(`pairs.py:114-128`)。新的統計:`cand_symbol`、`symbol_share`、`cand_unfinished`、`cand_capped`、`cand_capped_share`、`cap_raw`、`cap_T_oof_above`。
+- §5.3 的兩個驗收(chosen vs 真實的特徵 JSD、chosen 平均分數)只算非 DITTO 配對;含 DITTO 的值另存為 `*_all`(`pairs.py:177-202`、`make_pairs.py:75-76`)。
+
+**DPO(#8;複查 R2-1 到 R2-4;與 §5.4 不同)**
+- 評估:第 0 步(SFT 起點)、步數為 `--eval-every`(`C.DPO["eval_every"]` = 10)的倍數時、最後一步之後,在一組固定的 dev 前文(`C.DPO["dev_eval_n"]` = 60,用 run 的種子抽)上各生成 1 則,算 D-AUC₁₀、Band、特徵 JSD、`symbol_share`(`train_dpo.py:105-121, :226-292`)。生成的回覆只寫進 `runs/<dpo>/dev_outputs.jsonl`。
+- 選法(`SELECTION`,`train_dpo.py:47-52, :123-131`):`symbol_share` 比第 0 步高出 0.05 以上(60 則中 3 則)的排在後面;其餘取 D-AUC₁₀ 最低,同分取 Band 高,再同分取較早的步。第 0 步也能被選中,這時 `adapter_best` 是不起作用的 LoRA,`run_eval --dpo` 等於 SFT 模型。
+- **與 §5.4 不同**:§5.4 是每 100 步看 64 則、「D-AUC 不再下降就停」;實作是訓練完 1 epoch,再從這些評估中取最好的一個。在 60 個前文上反覆取 D-AUC₁₀ 的最小值是偏樂觀的估計。這條規則是實作時定的(不是預先登記的),寫進這裡的時間早於任何正式 DPO;要不要把它當成登記的規則,由使用者決定。
+- dev 保留:SFT 的 `adapter_best` 如果在 dev 上訓練過(`runs/<sft>/metrics.json` 的 `phase2.n_dev_in_train` > 0),DPO 跑兩次:先以 SFT 的 `adapter_devsel` 為參考、用 dev 選步數(選定的 → `adapter_devsel`),再以 SFT 的 `adapter_best` 為參考跑同樣的步數(選定的那一步 → `adapter_best`,最後一步 → `adapter_last`)(`train_dpo.py:155-176, :208-303`)。訓練時間約加倍。配對的前文落在 dev 就拒絕(`train_dpo.py:189-191`)。`metrics.json` 記 `dev_heldout`、`selection_sft_adapter`、`sft_n_dev_in_train`、`retrain`。
+
+**驗收尺(§6.1;#1、#3、#11、#12、#13;複查 R1-3、R1-6)**
+- NLL 改算真實測試回覆(`evaluate.py:275`;規格原本就這樣寫,錯在程式)。
+- 符號類生成回覆(`flag_symbols.is_symbol_turn(text.reply_text(msgs))`)不進分辨器、NCD、抄襲、外漏、離題、Band、JSD、多樣性、MMI,比例記為 `symbol_share`(`evaluate.py:244-277`、`run_eval.py:155-158`);pairs、human_eval、report、train_dpo 用同一個判定。`symbol_share` 本身沒有登記門檻,**待決定**。
+- C-S 從 `t.msgs` 建(連發、長度、語氣詞、顏文字照原樣),純貼圖回合保留、符號類排除(`evaluate.py:229-234`、`run_eval.py:130`)。
+- 離題門檻在訓練期(含 dev)的真實回覆上配(`embed.fit_ontopic_threshold`,`embed.py:58-66`),make_pairs 與 run_eval 共用;之前 run_eval 是在測試回覆上配的。
+- 多樣性預設稀疏化到 100 則(`C.EVAL["rarefy_n"]`),先排序再抽,所以 C-shuf 與 C-real 相同(`evaluate.py:181-188`);另報和真實回覆在同一個回覆數下的比值 `div_distinct2_ratio`、`div_hill1_ratio`(`evaluate.py:262-268`),線 2 用這兩個比值。
+- 分辨器拆成 `discriminator_scores`(OOF 分數)與 `discriminator`(`evaluate.py:54-95`),bootstrap 重用 OOF 分數。
+
+**報告與驗收線(#7;`report.py`、`config.LINES`)**
+- `paired_bootstrap`:以測試前文為單位重抽 2,000 次(`C.EVAL["boot_n"]`)。`d_auc_bootstrap`:每個系統的 OOF 分數只算一次,所以 CI 不含分辨器重新擬合的變異。另有 `compare`(CLI `--compare`)、`table`(CLI `--table`)、`acceptance`(線 1–2)、`lines_from_human`(線 3)。
+- 門檻集中在 `config.LINES`:D-AUC₁ 0.75、D-AUC₁₀ 0.90、Band 差 1、多樣性 0.80、Copy 0.02;線 3 指向 `C.HUMAN["A"]["p_line"]`(0.65)與 `C.HUMAN["B"]["p_line"]`(0.60)。三個實作解讀待確認,見 §6.3。
+
+**本人盲判(#5、#6;複查 R1-1、R1-2、R1-4、R1-5)**:Wald SPRT 與出題方式見 §6.2;參數在 `config.HUMAN`(`max_n` 100;題型 A 0.55 / 0.75;題型 B 0.50 / 0.70;α = β = 0.05)。CLI 是 `python -m persona.human_eval make` 與 `score`,資料夾必須在 `runs/` 底下。
+
+**輸出目錄(#14)**:`train_sft` 的目錄名在非預設設定時加 `_attn`(`--attn-only`)、`_lora-…`(其他 LoRA 目標)、`_ep<N>`、`_noretrain`;`make_pairs` 預設 `pairs_<sft>_s<seed>`;`train_dpo` 預設 `dpo_<sft>_<pairs 目錄>_s<seed>`;`run_eval` 的 C-base 改名 `untrained_<model>_s<seed>`、基準線 `B-<kind>[-<shots>]_<model>_s<seed>`。目錄已存在且非空時,沒有 `--overwrite` 就拒絕,在載入模型之前檢查。`train_sft --quick`(`sft_quick_all_s0`)與 `make_pairs --quick`(`pairs_quick`)的目錄名沒變,重跑要 `--overwrite`;`train_dpo --quick` 的目錄改為 `dpo_sft_quick_all_s0_pairs_quick_s0`。
+
+**常數(`config.py`)**:`C.DPO["eval_every"]` 10、`C.DPO["dev_eval_n"]` 60、`C.SFT["retrain_full"]` True、`C.EVAL["rarefy_n"]` 100、`C.EVAL["boot_n"]` 2,000、`C.HUMAN`、`C.LINES`。
+
+**測試**:`python tests/run_tests.py --synth`(2026-11-02):54 個測試,47 過、0 失敗、7 SKIP(`test_mask` 2 個缺 transformers、`test_train` 5 個缺 torch)。`generate.token_batches`、`train_dpo.selection_key` 等放在 import torch 的模組裡的純函式有單元測試(`tests/test_train.py` 末三個),本機有 torch 時才跑(複查 R2-8)。
+
+**計時(待確認)**:上表的「約 1 s/step」來自 `step_seconds`,它只量每步 4 個 micro-batch 中的最後一個加上參數更新(`train_sft.py:130, :142`),所以一步的實際時間更長,5–15 分鐘的估計也可能偏低;`metrics.json` 新增的 `seconds`(整段訓練的牆鐘時間)可以拿來重估。
