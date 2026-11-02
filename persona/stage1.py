@@ -14,21 +14,14 @@ import time
 import numpy as np
 
 from . import config as C
-from . import parse_line, samples as SM, split as SP, turns as TU
-from .flag_symbols import flag_raw, is_symbol_turn
+from . import samples as SM, split as SP, turns as TU
+from .data import load_all as load_all_data
+from .flag_symbols import flag_raw
 from .rulers import features as FE, validate as V
 from .rulers.calibrate import Calibrator
 
 
-def load_all():
-    """messages -> turns (with symbol flags, segments, blocks) -> segments."""
-    msgs, n_sys = parse_line.load()
-    turns = TU.build_turns(msgs)
-    for t in turns:
-        t.symbol = is_symbol_turn(t.ruler_text)
-    segs = TU.assign_segments(turns)
-    SP.assign_blocks([t for t in turns if t.split == "train" and t.ruler_text and not t.symbol])
-    return msgs, n_sys, turns, segs
+load_all = load_all_data      # kept for the drivers that import it from here
 
 
 def _dump(obj, path):

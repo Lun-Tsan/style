@@ -18,7 +18,7 @@ from . import samples as SM, split as SP
 from .generate import CopyChecker, generate_replies
 from .pairs import build_pairs, fit_scorer, pairs_feature_jsd
 from .rulers import validate as V
-from .stage1 import load_all
+from .data import load_all
 
 
 def run(sft_dir, out, n_cand=C.DPO["n_cand"], seed=0, quick=False, model="instruct", use_bge=True, log=print):

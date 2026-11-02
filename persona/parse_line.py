@@ -90,5 +90,7 @@ def load(path: Path = C.CHAT_PATH):
     lines = read_lines(path)
     found = detect_speakers(lines)
     if set(found) != set(C.SPEAKERS):
-        raise ValueError(f"speakers found {found} differ from config {C.SPEAKERS}")
+        # codes only: the display names are private and this message can end up in a log
+        raise ValueError(f"speakers found in the export ({len(found)}) differ from the configured pair "
+                         f"{sorted(C.CODE[s] for s in C.SPEAKERS)}; check persona/local_speakers.json")
     return parse(lines, found)

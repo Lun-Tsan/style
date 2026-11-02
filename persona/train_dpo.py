@@ -27,7 +27,7 @@ from . import modeling as MD
 from . import samples as SM, split as SP
 from .evaluate import pseudo_turn
 from .samples import Sample
-from .stage1 import load_all
+from .data import load_all
 
 
 def dpo_loss(pol_c, pol_r, ref_c, ref_r, beta: float):

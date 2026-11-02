@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import math
 
-import torch
-
 from persona import config as C
 from persona import turns as TU
-from persona.baselines import parse_chat_output
-from persona.generate import CopyChecker
 from persona.human_eval import sprt_stop
 from persona.pairs import build_pairs, cell, cell_level
 from persona.samples import Sample
-from persona.train_dpo import dpo_loss
+from persona.text import CopyChecker
 
 
 class FakeScorer:
@@ -72,6 +68,8 @@ def test_build_pairs_cell_ladder():
 
 
 def test_dpo_loss_matches_formula():
+    import torch                                   # skipped by the runner when torch is absent
+    from persona.train_dpo import dpo_loss
     pc, pr, rc, rr = torch.tensor([-10.0, -5.0]), torch.tensor([-12.0, -4.0]), torch.tensor([-11.0, -6.0]), torch.tensor([-11.0, -6.0])
     loss, diag = dpo_loss(pc, pr, rc, rr, beta=0.1)
     manual = -torch.nn.functional.logsigmoid(0.1 * ((pc - rc) - (pr - rr))).mean()
@@ -80,6 +78,7 @@ def test_dpo_loss_matches_formula():
 
 
 def test_parse_chat_output():
+    from persona.baselines import parse_chat_output   # imports torch through persona.generate
     assert parse_chat_output("<think>想一下</think>\n我: 好啊\n我：我看看\n\n對方: 謝謝") == ["好啊", "我看看"]
     assert parse_chat_output("好啊") == ["好啊"]
     assert parse_chat_output("") == []

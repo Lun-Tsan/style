@@ -23,7 +23,7 @@ from . import config as C
 from . import data_sft as D
 from . import modeling as MD
 from . import samples as SM, split as SP
-from .stage1 import load_all
+from .data import load_all
 
 
 def cosine_with_warmup(step, total, warmup):

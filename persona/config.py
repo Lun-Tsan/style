@@ -71,5 +71,18 @@ SFT = dict(lr=1e-4, warmup=0.03, micro_batch=2, grad_accum=4, weight_decay=0.0,
            epochs={100: 5, 250: 4, 500: 3, None: 3})
 DECODE = dict(temperature=0.8, top_p=0.95, max_new_tokens=64, max_msgs=6)
 DPO = dict(beta=0.1, lr=5e-6, epochs=1, n_cand=8, delta=math.log(3), cap_q=0.95, ditto_max=0.5,
-           copy_lcs=12, ontopic_q=0.90)
+           copy_lcs=12, ontopic_q=0.90,
+           eval_every=10,        # DPO: evaluate dev generations with the acceptance rulers every N optimizer steps
+           dev_eval_n=60)        # DPO: number of dev contexts generated at each evaluation
+SFT["retrain_full"] = True      # after dev selects the epoch count, retrain on train + dev for that many epochs (§2.5)
+
+# evaluation (§6.1) and human blind test (§6.2)
+EVAL = dict(rarefy_n=100,       # diversity (distinct-2, Hill-1) is computed on this many replies per system
+            boot_n=2000)        # paired bootstrap over test contexts (report.py)
+HUMAN = dict(max_n=100,
+             # kind A ("which one is mine?"): line 3 passes when accuracy <= p_line; Wald SPRT between p_low and
+             # p_high (indifference zone around the line), error rates alpha (wrongly "above") and beta (wrongly "below")
+             A=dict(p_line=0.65, p_low=0.55, p_high=0.75, alpha=0.05, beta=0.05),
+             # kind B ("which is more like me?", system vs baseline): passes when preference >= p_line
+             B=dict(p_line=0.60, p_low=0.50, p_high=0.70, alpha=0.05, beta=0.05))
 SEEDS = (0, 1, 2)

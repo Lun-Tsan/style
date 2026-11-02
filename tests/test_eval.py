@@ -6,7 +6,7 @@ import json
 
 from persona import config as C
 from persona import evaluate as EV, samples as SM
-from persona.generate import CopyChecker
+from persona.text import CopyChecker
 from tests.test_data import data
 
 _E = {}

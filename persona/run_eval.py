@@ -24,7 +24,7 @@ from . import evaluate as EV
 from . import modeling as MD
 from . import samples as SM, split as SP
 from .generate import generate_replies
-from .stage1 import load_all
+from .data import load_all
 
 
 def build_evaluator(turns, test, use_bge=True, log=print):

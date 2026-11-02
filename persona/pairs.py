@@ -18,7 +18,7 @@ from collections import Counter
 import numpy as np
 
 from . import config as C
-from .generate import CopyChecker, leak_chars, reply_text
+from .text import CopyChecker, leak_chars, reply_text
 from .normalize import PH, PH_LINE
 from .rulers import features as FE
 from .rulers.calibrate import Calibrator
