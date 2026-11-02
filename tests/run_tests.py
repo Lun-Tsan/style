@@ -16,7 +16,7 @@ sys.path.insert(0, ROOT)
 sys.stdout.reconfigure(encoding="utf-8")
 
 MODULES = ["tests.test_synth", "tests.test_data", "tests.test_prompt", "tests.test_rulers", "tests.test_mask",
-           "tests.test_eval", "tests.test_train"]
+           "tests.test_eval", "tests.test_train", "tests.test_human"]
 OPTIONAL = {"torch", "transformers", "peft"}     # GPU-side dependencies, absent e.g. in a cloud container
 
 
