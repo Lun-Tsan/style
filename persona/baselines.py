@@ -1,6 +1,6 @@
 """persona.baselines -- prompting baselines B0 (zero-shot), B1-n (many-shot), B2 (retrieval) for the instruct
 checkpoint (PIPELINE_SPEC §4). They use the chat template (thinking off); the context itself is rendered by the
-same prompt builder as every other system."""
+same prompt builder as the trained systems and cut to the same turns (generate.generation_prompt)."""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,7 @@ import re
 import numpy as np
 
 from . import config as C
-from .generate import sample_continuations
+from .generate import generation_prompt, sample_continuations
 from .normalize import PH_LINE
 from .prompt import ME, OTHER, parse_generation, render
 
@@ -40,8 +40,10 @@ def example_block(examples):
     return "\n".join(lines)
 
 
-def build_messages(sample, examples=None):
-    prompt, _ = render(sample)
+def build_messages(sample, examples=None, tok=None):
+    """tok given: the context is cut to the turns the trained systems see (generate.generation_prompt, §0: 512 tokens
+    in the plain format), so prompting and trained systems answer the same context."""
+    prompt = generation_prompt(tok, sample) if tok is not None else render(sample)[0]
     ctx_text = prompt[:-len(f"{ME}: ")].rstrip() or "(對話開始)"
     user = ""
     if examples:
@@ -82,9 +84,13 @@ def retrieval_examples(bge, train_samples, sample, k: int = 20):
     return [cands[i] for i in sorted(top, key=lambda i: cands[i].target.date)]
 
 
-def run_baseline(model, tok, samples, kind: str, train_samples=None, n_shots=None, bge=None, seed: int = 0, **kw):
-    """kind in {zero, many, retrieval}. Returns [{sid, msgs}] and the median prompt length in tokens."""
-    prompts = []
+def run_baseline(model, tok, samples, kind: str, train_samples=None, n_shots=None, bge=None, seed: int = 0, log=print,
+                 **kw):
+    """kind in {zero, many, retrieval}; many with n_shots None takes the whole example_pairs pool (B1-all).
+    Returns [{sid, msgs}] and the prompt length statistics in tokens. The statistics are logged before generation so
+    that an out-of-memory stop can be traced to the prompt length; sample_continuations batches the prompts by its
+    token budget (CODE_REVIEW #15)."""
+    prompts, n_ex = [], []
     for s in samples:
         if kind == "zero":
             ex = None
@@ -94,8 +100,13 @@ def run_baseline(model, tok, samples, kind: str, train_samples=None, n_shots=Non
             ex = retrieval_examples(bge, train_samples, s, n_shots or 20)
         else:
             raise ValueError(kind)
-        prompts.append(chat_prompt(tok, build_messages(s, ex)))
+        n_ex.append(len(ex) if ex else 0)
+        prompts.append(chat_prompt(tok, build_messages(s, ex, tok)))
     n_tok = [len(tok(p, add_special_tokens=False)["input_ids"]) for p in prompts]
+    info = {"prompt_tokens_min": int(min(n_tok)), "prompt_tokens_median": int(np.median(n_tok)),
+            "prompt_tokens_max": int(max(n_tok))}
+    log(f"B-{kind}: {len(prompts)} prompts, up to {max(n_ex)} examples per prompt; prompt tokens min / median / max "
+        f"{info['prompt_tokens_min']} / {info['prompt_tokens_median']} / {info['prompt_tokens_max']}")
     conts = sample_continuations(model, tok, prompts, n=1, seed=seed, **kw)
     outs = [{"sid": s.sid, "msgs": parse_chat_output(c[0])} for s, c in zip(samples, conts)]
-    return outs, {"prompt_tokens_median": int(np.median(n_tok)), "prompt_tokens_max": int(max(n_tok))}
+    return outs, info
