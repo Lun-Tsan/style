@@ -24,9 +24,14 @@ def data():
 
 def test_parse_counts():
     msgs, n_sys, turns, segs = data()
-    assert len(msgs) == 4967, len(msgs)
-    assert n_sys == 23, n_sys
-    assert TU.counts(turns) == {"train": (785, 862), "test": (134, 149)}, TU.counts(turns)
+    if C.SYNTH:                                   # counts known by construction (persona/synth.py)
+        from persona.synth import generate
+        truth = generate()[1]
+        want = (truth["n_msgs"], truth["n_sys"], truth["text_turns_S_T"])
+        assert (len(turns), len(segs)) == (truth["n_turns"], truth["n_segments"]), (len(turns), len(segs), truth)
+    else:
+        want = (4967, 23, {"train": (785, 862), "test": (134, 149)})
+    assert (len(msgs), n_sys, TU.counts(turns)) == want, (len(msgs), n_sys, TU.counts(turns), want)
     assert all(m.date and m.time and m.who in C.SPEAKERS for m in msgs)
 
 

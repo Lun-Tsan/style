@@ -1,6 +1,8 @@
 """Ruler tests: pre-registered validation thresholds on the v1 rule (slow, ~2 min), calibration, features."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from persona import config as C
@@ -21,7 +23,7 @@ def _validation():
 
 def test_validation_thresholds():
     res = _validation()
-    verdict = V.judge(res)
+    verdict = V.judge(res, ref_k50=None if C.SYNTH else C.EXP4_LOOSE_K50)   # experiment-4 numbers are real-data only
     assert verdict["pass"], verdict["checks"]
 
 
@@ -70,10 +72,16 @@ def test_stats_helpers():
 
 def test_features_and_bands():
     _, _, turns, _ = data()
-    trT = [t for t in turns if t.split == "train" and t.who == C.TARGET and t.ruler_text and not t.symbol]
-    trS = [t for t in turns if t.split == "train" and t.who == C.PARTNER and t.ruler_text and not t.symbol]
+    # stage-1 population of the feature rulers (CODE_REVIEW #4): non-symbol train turns INCLUDING sticker-only ones
+    # (ruler_text None), as in the acceptance bags
+    trT = [t for t in turns if t.split == "train" and t.who == C.TARGET and not t.symbol]
+    trS = [t for t in turns if t.split == "train" and t.who == C.PARTNER and not t.symbol]
+    sticker_only = [t for t in trT if t.ruler_text is None]
+    assert sticker_only and any(t.ruler_text is None for t in trS)
     f = FE.turn_features(trT[0])
     assert set(f) == set(FE.FEATURES)
+    fs = FE.turn_features(sticker_only[0])
+    assert fs["sticker"] == 1.0 and math.isnan(fs["particle_T"])          # text features undefined, not zero
     bands = FE.fit_bands(trT, n=100)
     assert all(bands[k] is None or bands[k]["lo"] <= bands[k]["hi"] for k in FE.FEATURES)
     chk = FE.band_check(FE.bag_features(trT[:50]), bands)
@@ -90,3 +98,8 @@ def test_features_and_bands():
     assert disc["particle_S"]["mean_S"] > disc["particle_S"]["mean_T"]
     w = FE.discrimination_weights(bands, disc)
     assert abs(sum(w.values()) - 1.0) < 1e-9
+    # control chart: data.load_all gives sticker-only turns the date block of their date, so no turn is left out
+    from persona.data import load_all
+    tb = load_all(check_manifest=False)[2]
+    chart = FE.control_chart([t for t in tb if t.split == "train" and t.who == C.TARGET and not t.symbol], bands)
+    assert sorted(chart) == [str(b) for b in range(C.N_BLOCKS)], sorted(chart)

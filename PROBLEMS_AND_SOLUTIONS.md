@@ -40,8 +40,10 @@
 **證據**:今天過濾後,最佳單回合判定也只有 NB 0.75–0.77(調門檻 0.80–0.81,AUC 0.885–0.906);7 字短句全部 0.66–0.72。過濾後 NB 要 5–10 則一袋才 ≥ 0.98,正式距離 10 則才 ≥ 0.96。
 
 **S1 累積決策(心理計量學 + 序貫分析 + 訊號處理)**
-- **Spearman–Brown 公式**(心理計量學,書目待查證):k 題合成分數的信度 ρ_k = kρ_1 / (1 + (k−1)ρ_1)。把「單回合判定的分半相關」當 ρ_1,可以**預測**要幾則才達到目標信度,而不只是經驗曲線。我們的曲線(k=5 → 0.94、k=10 → 0.96、k=25 → 0.99)可以用它擬合,並回報「達到 0.95 所需的 k」當作一個指標。
-- **SPRT 序貫機率比檢定**(Wald,書目待查證):作者語言模型的對數似然比天生就是序貫檢定的統計量。逐則累積,碰到上下界就下判斷。好處:(a) 給出**平均需要幾則才能判定**(decision latency),這是比「k 則準確率」更自然的指標;(b) 錯誤率可控。
+- **Spearman–Brown 公式**(心理計量學,書目已查證 2026-10-17:Spearman 1910 與 Brown 1910 是同一期 *Brit. J. Psychology* 的兩篇獨立論文):k 題合成分數的信度 ρ_k = kρ_1 / (1 + (k−1)ρ_1)。把「單回合判定的分半相關」當 ρ_1,可以**預測**要幾則才達到目標信度,而不只是經驗曲線。我們的曲線(k=5 → 0.94、k=10 → 0.96、k=25 → 0.99)可以用它擬合,並回報「達到 0.95 所需的 k」當作一個指標。
+  更正 2026-10-17:公式本身正確,但它預測的是**信度係數**(平行測量之間的相關),前提是各題互為平行測量。上面的曲線是**判定準確率**,不是信度,不能直接拿公式擬合,「達到 0.95」的 0.95 也不是同一個量。要用的話,ρ_1 應是同一作者兩個單回合分數之間的相關(單題信度),先算袋分數的信度再套公式;回合長度、貼圖不同,不完全平行,預測只是近似。
+- **SPRT 序貫機率比檢定**(Wald 1945,書目已查證 2026-10-17):作者語言模型的對數似然比天生就是序貫檢定的統計量。逐則累積,碰到上下界就下判斷。好處:(a) 給出**平均需要幾則才能判定**(decision latency),這是比「k 則準確率」更自然的指標;(b) 錯誤率可控。
+  補充 2026-10-17:(b) 的錯誤率界限是在「兩個簡單假設、觀測獨立同分布、似然比來自真實模型」下的近似;NB 是近似模型、相鄰回合有相關,實際錯誤率要用 OOF 模擬確認。
 - **Welch 平均**(訊號處理):短樣本的頻譜估計靠把樣本切段平均;分袋就是這件事,袋之間可以重疊(我們已經這樣做),信賴區間要用回合層級的 bootstrap。
 - **匹配濾波器**(聲納):作者 LM 的 LLR 就是對「這個人」的匹配濾波器,是短訊號下理論上最有效的偵測統計量。這解釋了為什麼 NB 贏過所有正式距離。
 
@@ -58,32 +60,38 @@
 
 **S5 封閉類特徵**(文體學傳統 + 語言學):只在封閉類字元上算尺:語氣詞、代名詞、連接詞、標點、數量詞。這些與話題無關。做法:詞表選擇時用 Zeta 的兩人對比 + 「跨話題穩定度」(在不同日期區塊都出現)雙重篩選。
 
-**S6 變異數分解**(心理計量學的概化理論,書目待查證):把特徵值的變異拆成 人 × 時期 × 話題 × 殘差。G-study 估各成分,D-study 回答「要多少則、跨幾個時期才能把人的效應量出來」。這把 E4 從「通過/不通過」變成可解釋的數字:人際變異佔比。經濟學的 **DiD** 是它的兩因子特例,我們今天的「同時期配對 E4」就是 DiD;結果顯示時期效應小、話題效應大。
+**S6 變異數分解**(心理計量學的概化理論,Cronbach et al. 1972,書目已查證 2026-10-17):把特徵值的變異拆成 人 × 時期 × 話題 × 殘差。G-study 估各成分,D-study 回答「要多少則、跨幾個時期才能把人的效應量出來」。這把 E4 從「通過/不通過」變成可解釋的數字:人際變異佔比。經濟學的 **DiD** 是它的兩因子特例,我們今天的「同時期配對 E4」就是 DiD;結果顯示時期效應小、話題效應大。
+更正 2026-10-17:「DiD 是它的兩因子特例」不成立,Cronbach et al. 1972 也沒有談 DiD。概化理論估的是變異成分(回答「量得穩不穩」);DiD 估的是 2×2 設計(處理 × 前後)裡的一個交互作用對比(回答「處理有沒有效果」)。兩者只共用雙因子設計;同時期配對的 E4 是「把時期固定住」的分層比較,稱為 DiD 只是類比。
 
 ### P3 只有兩位作者,z 分數沒有參照母體 🔴
 
 **S7 以無參照距離為主**:Min–max、NCD、NB 都不需要母體;Cosine Delta 只在 Tier 2 有多作者資料時使用。
-**S8 合成對照母體**(經濟學的 synthetic control,書目待查證):沒有真正的對照組時,用可得的「捐贈者」加權組合成對照。這裡的捐贈者:原始模型在不同溫度的輸出、對方的回覆、本人不同時期的袋。用它們算每個特徵的平均與離散度當 z 分數參照。缺點:參照不是真人母體,只能當啟發式,要在文件裡註明。
+**S8 合成對照母體**(經濟學的 synthetic control,Abadie et al. 2010,書目已查證 2026-10-17):沒有真正的對照組時,用可得的「捐贈者」加權組合成對照。這裡的捐贈者:原始模型在不同溫度的輸出、對方的回覆、本人不同時期的袋。用它們算每個特徵的平均與離散度當 z 分數參照。缺點:參照不是真人母體,只能當啟發式,要在文件裡註明。
+更正 2026-10-17:合成控制法的權重是為了讓捐贈者的加權組合在**介入前**的預測變數與結果上貼近**單一個受處理單位**,產出的是該單位的反事實軌跡;它不產生參照母體,也不提供離散度。「用捐贈者算平均與離散度當 z 參照」是我們的延伸,不是 Abadie et al. 的方法,引用時要寫成「受其啟發」。方法的源頭是 Abadie & Gardeazabal (2003);2010 是方法論文。
 **S9 經驗貝氏收縮**(James–Stein;海洋工程的資料同化同一精神):稀疏特徵(「～」結尾 2.3%)的估計值往整體平均收縮,變異數估計更穩,避免單一特徵因為幾次出現就主導距離。
 
 ### P4 加總分數的門檻漂移 🔴
 
 **證據**:NB 分數是整袋加總,偏向 T 的量隨 k 累積;門檻 0 時 k=50 只有 0.877,校準後 1.000。
 
-**S10 法庭科學的似然比校準**(書目待查證:Brümmer & du Preez 2006 的 Cllr;PAV / isotonic 校準):法庭語音辨識早就處理「LLR 要可解讀、可跨條件使用」:用訓練期 OOF 分數做 isotonic 校準,報 Cllr(校準損失)。校準後的 LLR 可以直接用證據強度的口語尺度解讀。
+**S10 法庭科學的似然比校準**(書目已查證 2026-10-17:Brümmer & du Preez 2006 的 Cllr;PAV / isotonic 校準見 Ayer et al. 1955):法庭語音辨識早就處理「LLR 要可解讀、可跨條件使用」:用訓練期 OOF 分數做 isotonic 校準,報 Cllr(校準損失)。校準後的 LLR 可以直接用證據強度的口語尺度解讀。
+更正 2026-10-17:(a) Brümmer & du Preez 2006 是**說話者偵測評測**的論文(標題 Application-independent evaluation of speaker detection),不是法庭科學;Cllr 後來被法庭 LR 文獻沿用。(b) Cllr 不是「校準損失」本身:它是對數似然比的交叉熵成本,同時反映鑑別力與校準;校準損失通常寫成 Cllr − Cllr_min,Cllr_min 是同一組分數經 PAV 單調轉換後的 Cllr。所以 handover §4 第 6 項的 Cllr 1.77 → 0.60 是總成本下降,要分出校準部分需另報 Cllr_min。(c) Ayer et al. 1955 提出的是單調限制下最大概似估計的合併演算法(PAV),拿來校準分類器分數是後來的用法。「證據強度的口語尺度」本輪未查出處,書目待查證。
 **S11 CFAR 自適應門檻**(雷達 / 聲納的恆虛警率偵測):門檻不是全域常數,而是由「鄰近參考格」的雜訊統計決定。對應:每個袋大小、每個時期各自從 OOF 參考袋估門檻。今天的校準就是這個做法的簡化版。
 **S12 評估全面改用排序指標**:AUC、配對準確率、SPRT 都不需要門檻;門檻只在最後報「可操作的判定」時給。
 
 ### P5 風格隨時間與對象改變 🔴/🟠
 
 **S13 狀態追蹤與近期加權**(控制:Kalman 濾波;金融:EWMA):把每個特徵當成隨時間緩慢漂移的狀態,用指數加權估「現在的風格」;評估以「最近兩個月」為基準而非全史;訓練時近期樣本加權(ablation)。
-**S14 統計製程管制圖**(製造業 Shewhart / CUSUM):對本人的特徵率畫管制圖,找出失控點(例如大量程式碼的那幾週),這些時期的資料降權或排除,也能自動抓到「話題事件」。
+**S14 統計製程管制圖**(製造業 Shewhart / CUSUM;Shewhart 1931,書目已查證 2026-10-17):對本人的特徵率畫管制圖,找出失控點(例如大量程式碼的那幾週),這些時期的資料降權或排除,也能自動抓到「話題事件」。
+更正 2026-10-17:CUSUM 不是 Shewhart 的方法,出自 Page (1954);Shewhart 1931 是管制圖(Shewhart chart)。
 **S15 對話對象條件化**:Marko 2022 顯示 emoji 頻率會隨對象改變。Tier 1 只有一位對象,寫進限制;Tier 2 在前文加對象代號。
 
 ### P6 人工驗證昂貴、LLM 裁判不可靠 🟠
 
-**S16 自我/非自我偵測**(免疫系統的負向選擇,仿生學):免疫系統只用「自我」的樣本訓練偵測器,任何不像自我的都當異物。對應:只用本人的真實回覆訓練單類別模型(例如本人 LM 的典型帶 + 特徵帶),不需要第二位作者就能偵測「不像本人」。這解決 Tier 1 只有一位對照作者、而且對照作者需要同意的問題。
+**S16 自我/非自我偵測**(免疫系統的負向選擇,仿生學;Forrest et al. 1994,書目已查證 2026-10-17):免疫系統只用「自我」的樣本訓練偵測器,任何不像自我的都當異物。對應:只用本人的真實回覆訓練單類別模型(例如本人 LM 的典型帶 + 特徵帶),不需要第二位作者就能偵測「不像本人」。這解決 Tier 1 只有一位對照作者、而且對照作者需要同意的問題。
+更正 2026-10-17:Forrest et al. 1994 的負向選擇是**隨機產生偵測器、刪掉會匹配自我樣本的那些**,留下的偵測器去匹配非自我(原文用字串與 r 個連續位元相同的匹配規則,應用是偵測電腦病毒造成的檔案變動)。上面的「本人 LM 典型帶 + 特徵帶」是單類別密度 / 容忍帶的做法,和負向選擇只共用「只需要自我樣本」這一點;論文裡負向選擇只能當類比,方法本身應引單類別分類的文獻(待補)。
 **S17 序貫抽樣的人工校準**(SPRT 再用一次):人工盲判不要一次固定 100 題;逐題累積「尺與人一致」的證據,一致率明確高於門檻就停,減少人力。
+補充 2026-10-17:照 Wald 1945 的做法,要先定兩個簡單假設(例如正確率 p₀ = 0.5 對 p₁ = 0.65)與 α、β,再用累積對數似然比對兩條界線停止。`METHOD_NEURIPS.md` §3.6 寫的「95% 區間落在 0.65 的一側就停」是反覆看信賴區間的規則,不是 SPRT;每加一題就看一次區間,實際錯誤率會高於名目的 5%。
 **S18 裁判委員會的分歧取樣**(主動學習的 query-by-committee):三把尺意見分歧的樣本優先送人工判,一致的不用看。人力集中在最有資訊的地方。
 
 ### P7 中文語意向量看不到風格、抓不到否定 🔴
@@ -104,9 +112,11 @@
 
 ### P9 平均化 🟠
 
-**S25 品質多樣性分格**(演化計算的 MAP-Elites,書目待查證;仿生學的「生態棲位」概念):不要只選分數最高的候選,而是先用**可解釋的行為描述子**(連發則數 × 長度級距 × 有無貼圖 × 有無語氣詞)把候選分格,每格保留最好的。組 DPO 配對時,「好」的一方取**真實回覆所在格**的最佳候選,讓模型學到的是本人的**行為分布**,不是單一最安全的回覆。這是 DivPO 的想法,但描述子是可解釋的文體特徵,而且格子的目標分布來自本人的真實資料。
-**S26 典型集帶**(資訊理論):本人的真實回覆在本人 LM 下的 surprisal 有一個典型帶(不會太意外,也不會太陳腔濫調)。候選的 LLR 不是越高越好:**高於帶的上界也扣分**(太像本人的口頭禪集錦 = 模仿秀)。這和 Turing-RL 把獎勵封頂是同一件事,但用本人資料定出帶的位置。
-**S27 分布層級目標**:候選集的特徵分布與本人分布的 JSD,也當成選擇與驗收指標;生態學的 **Hill 數**(q=1 的有效種數)量回覆多樣性,並用**稀疏化**(rarefaction)把樣本數拉齊再比。
+**S25 品質多樣性分格**(演化計算的 MAP-Elites,Mouret & Clune 2015,arXiv 1504.04909,書目已查證 2026-10-17;仿生學的「生態棲位」概念):不要只選分數最高的候選,而是先用**可解釋的行為描述子**(連發則數 × 長度級距 × 有無貼圖 × 有無語氣詞)把候選分格,每格保留最好的。組 DPO 配對時,「好」的一方取**真實回覆所在格**的最佳候選,讓模型學到的是本人的**行為分布**,不是單一最安全的回覆。這是 DivPO 的想法,但描述子是可解釋的文體特徵,而且格子的目標分布來自本人的真實資料。
+更正 2026-10-17:MAP-Elites 是演化搜尋演算法:使用者選的描述子把空間分格,每格保留表現最好的解(elite),再從 elite 突變 / 交配產生新解,目標是把格子盡量填上高品質解(論文稱為 illuminating the search space)。我們借的只有「描述子分格 + 每格留最佳」這個存檔結構;「chosen 取真實回覆所在格、讓配對服從本人的行為分布」是我們加的規則,MAP-Elites 的演算法裡沒有「目標分布」這一步,`METHOD_NEURIPS.md` §3.5 那句也要照這樣改寫。
+**S26 典型集帶**(資訊理論;典型取樣見 Meister et al. 2023,書目已查證 2026-10-17):本人的真實回覆在本人 LM 下的 surprisal 有一個典型帶(不會太意外,也不會太陳腔濫調)。候選的 LLR 不是越高越好:**高於帶的上界也扣分**(太像本人的口頭禪集錦 = 模仿秀)。這和 Turing-RL 把獎勵封頂是同一件事,但用本人資料定出帶的位置。
+更正 2026-10-17:Meister et al. 2023(TACL 11,標題 *Locally Typical Sampling*;arXiv v1 標題為 *Typical Decoding for Natural Language Generation*)講的是**解碼**:每一步只從資訊量(−log p)接近模型條件熵的 token 裡取樣,是**單一模型、逐 token、雙側**的帶。我們的帶在**作者 LLR(T 對 S 的校準對數勝算)**上、以**整則回覆**為單位,而且只有上界封頂(handover §5、`METHOD_NEURIPS.md` §3.5),和他們的典型性不是同一個量,引用時只能寫「受其啟發」。另外本段前半講 surprisal 的帶、後半講 LLR 的上界,實作用的是後者,兩者也要分開寫。
+**S27 分布層級目標**:候選集的特徵分布與本人分布的 JSD,也當成選擇與驗收指標;生態學的 **Hill 數**(q=1 的有效種數;Hill 1973,書目已查證 2026-10-17)量回覆多樣性,並用**稀疏化**(rarefaction)把樣本數拉齊再比(稀疏化是另一個方法,出處書目待查證)。
 
 ### P10 Goodhart 🟠
 
@@ -173,10 +183,12 @@
 | 金融 | Sharpe 比、風險平價 | 雜訊底線正規化、逆變異數加權 | ✅ |
 | 仿生學/免疫 | 負向選擇 | 只用本人資料的單類別偵測器 | ✅ |
 | 演化計算 | MAP-Elites 品質多樣性 | 可解釋描述子分格的 DPO 配對 | ✅ |
-| 生態學 | Bray–Curtis、稀疏化、Hill 數 | Min–max 即 Bray–Curtis;多樣性量法 | ✅ |
+| 生態學 | Bray–Curtis、稀疏化、Hill 數 | Min–max 即 Bray–Curtis(更正見表下);多樣性量法 | ✅ |
 | 資訊理論 | 典型集、MDL | surprisal 容忍帶;NCD | ✅ |
 | 流行病學 | 配對病例對照 | 同前文、長度配對 | ✅ |
 | 主動學習 | query-by-committee | 尺分歧的樣本優先人工判 | ✅ |
+
+更正 2026-10-17(表中「Min–max 即 Bray–Curtis」;Bray & Curtis 1957,書目已查證 2026-10-17):兩者不相等。Min–max 相似度 R = Σmin(x,y) / Σmax(x,y)(Ruzicka);Bray–Curtis 相似度 = 2Σmin(x,y) / Σ(x+y)(係數 2w/(a+b))。因為 min + max = x + y,BC = 2R / (1+R),是 R 的單調函數:排序類結果(AUC、配對準確率、within < cross 的通過率)相同,但數值與門檻不同,報數字時不能互換名稱。
 
 ---
 
@@ -185,4 +197,23 @@
 **v1(Tier 1,現在可做)**:S1、S2、S3、S4、S5、S7、S9、S10、S11、S12、S16、S17、S18、S19、S20、S21、S22、S24、S25、S26、S27、S28、S29、S30、S31、S32、S33、S35、S36、S37(需 OpenCC)、S38、S39、S40、S42、S43。
 **Tier 2 / 未來**:S6(需多時期多話題的 G-study)、S8(合成對照,先標啟發式)、S13/S14(近期加權當 ablation)、S15(多對象)、S23(檢定力計算可先做)、S34(多人預適應)、S41(多輪測試在 v1 末端做小規模)。
 
-書目待查證(本輪離線引入):Spearman & Brown(1910)、Wald(1945, SPRT)、Brümmer & du Preez(2006, Cllr)、Ayer et al.(1955, PAV)、Cronbach et al.(1972, 概化理論)、Abadie et al.(2010, 合成控制)、Mouret & Clune(2015, MAP-Elites)、Meister et al.(2023, 典型取樣)、Hill(1973, 多樣性數)、Bray & Curtis(1957)、Forrest et al.(1994, 負向選擇)、Shewhart(1931)。
+**書目已查證 2026-10-17**(本輪離線引入的 12 項;原本的年份與作者都對,只有「Spearman & Brown」要拆成兩篇。查證方式:作者、年份、標題、卷期頁、DOI 以 Project Euclid、JSTOR、ACL Anthology、arXiv、GESIS、ResearchGate、Crossref 的索引紀錄核對;「文獻說了什麼」以摘要與二手來源核對,本輪工具無法下載全文,沒有逐頁讀原文。內容不符的地方已在使用處加「更正 2026-10-17」):
+- Spearman, C. (1910). Correlation calculated from faulty data. *British Journal of Psychology*, 3(3), 271–295. https://doi.org/10.1111/j.2044-8295.1910.tb00206.x
+- Brown, W. (1910). Some experimental results in the correlation of mental abilities. *British Journal of Psychology*, 3(3), 296–322. https://doi.org/10.1111/j.2044-8295.1910.tb00207.x
+- Wald, A. (1945). Sequential tests of statistical hypotheses. *The Annals of Mathematical Statistics*, 16(2), 117–186. https://doi.org/10.1214/aoms/1177731118
+- Brümmer, N., & du Preez, J. (2006). Application-independent evaluation of speaker detection. *Computer Speech & Language*, 20(2–3), 230–275. https://doi.org/10.1016/j.csl.2005.08.001
+- Ayer, M., Brunk, H. D., Ewing, G. M., Reid, W. T., & Silverman, E. (1955). An empirical distribution function for sampling with incomplete information. *The Annals of Mathematical Statistics*, 26(4), 641–647. https://doi.org/10.1214/aoms/1177728423
+- Cronbach, L. J., Gleser, G. C., Nanda, H., & Rajaratnam, N. (1972). *The Dependability of Behavioral Measurements: Theory of Generalizability for Scores and Profiles*. New York: Wiley. ISBN 0-471-18850-6.
+- Abadie, A., Diamond, A., & Hainmueller, J. (2010). Synthetic control methods for comparative case studies: Estimating the effect of California's tobacco control program. *Journal of the American Statistical Association*, 105(490), 493–505. https://doi.org/10.1198/jasa.2009.ap08746
+- Mouret, J.-B., & Clune, J. (2015). Illuminating search spaces by mapping elites. arXiv:1504.04909. https://arxiv.org/abs/1504.04909 (引用的是 arXiv 預印本)
+- Meister, C., Pimentel, T., Wiher, G., & Cotterell, R. (2023). Locally typical sampling. *Transactions of the Association for Computational Linguistics*, 11, 102–121. https://doi.org/10.1162/tacl_a_00536 (arXiv 2202.00666;v1 標題為 "Typical Decoding for Natural Language Generation")
+- Hill, M. O. (1973). Diversity and evenness: A unifying notation and its consequences. *Ecology*, 54(2), 427–432. https://doi.org/10.2307/1934352
+- Bray, J. R., & Curtis, J. T. (1957). An ordination of the upland forest communities of southern Wisconsin. *Ecological Monographs*, 27(4), 325–349. https://doi.org/10.2307/1942268
+- Forrest, S., Perelson, A. S., Allen, L., & Cherukuri, R. (1994). Self-nonself discrimination in a computer. In *Proceedings of the 1994 IEEE Computer Society Symposium on Research in Security and Privacy* (pp. 202–212). https://doi.org/10.1109/RISP.1994.296580
+- Shewhart, W. A. (1931). *Economic Control of Quality of Manufactured Product*. New York: D. Van Nostrand.
+
+更正時引入、同日查證:
+- Page, E. S. (1954). Continuous inspection schemes. *Biometrika*, 41(1–2), 100–115. https://doi.org/10.1093/biomet/41.1-2.100
+- Abadie, A., & Gardeazabal, J. (2003). The economic costs of conflict: A case study of the Basque Country. *American Economic Review*, 93(1), 113–132. https://doi.org/10.1257/000282803321455188
+
+仍待查證:證據強度的口語尺度(S10)、稀疏化(S27)、單類別分類(S16)的出處;以上 12 項寫進論文前仍建議讀全文,尤其 Cllr_min 的定義(Brümmer & du Preez 2006)與 SPRT 的界線公式(Wald 1945)。

@@ -1,0 +1,118 @@
+% experiments.tex -- Sections 4 (Experiments) and 5 (Limitations), converted from METHOD_NEURIPS.md §4--5 on 2026-10-17.
+% One sentence per line. Each subsection's 中文要點 is the comment block directly under its heading.
+% "% NOTE:" comments mark places where the wording differs from the Markdown draft, or where docs disagree.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Tier 1: runnable now (one target person)}
+\label{sec:tier1}
+% 中文要點:
+% 一人資料、約 700 訓練樣本;基準線 = zero-shot、many-shot(4 種 n)、檢索式、best-of-8;
+% 主系統 = SFT(4 個資料量 × 2 底模)與 SFT+DPO;七項消融;六個預先登記假設;一張 16 GB 卡幾天內跑完。
+% 預期:自動線贏 prompting、人判線離「分不出來」還遠。
+
+\paragraph{Data.}
+We use one LINE log (4,967 messages, 2025-06-20 to 2026-09-19).
+% NOTE: the filtered counts below are Exp. 4 (loose rule; FORMAL_DISTANCE_EXPERIMENT.md §E). The stage-1 package with the
+% emoticon whitelist gives train S 698 / T 707 and test S 118 / T 126 (handover.md §3; reports/ruler_validation.md).
+% Pick one source before submission. reports/data_stats.json has the stage-1 sample counts for the TBD table.
+The training period (before 2026-07-20) has 862 T turns (706 after symbol filtering) and 785 S turns (679); the held-out period has 149 T turns (126) and 134 S turns (115).
+The median turn length is 16 characters.
+Exact sample counts, context-length and target-length distributions, sticker share and per-month counts are reported in \tbd{Table: sample statistics from \texttt{samples.stats()}}.
+
+\paragraph{Systems.}
+Table~\ref{tab:systems} lists the systems and controls.
+% NOTE: the draft's B1 purpose read "the strongest prompting alternative with the same data"; "strongest" is not yet
+% measured, so the cell is rephrased.
+
+\begin{table}[t]
+\centering
+\caption{Systems and controls in Tier~1.}
+\label{tab:systems}
+\begin{tabular}{@{}p{0.17\linewidth}p{0.43\linewidth}p{0.32\linewidth}@{}}
+\toprule
+id & system & purpose \\
+\midrule
+B0 & zero-shot, Qwen3.5-4B-Instruct, Chinese system prompt & prompting floor \\
+B1-$n$ & many-shot ICL \citep{agarwal2024manyshot}, $n \in \{10, 50, 200, \text{all}\}$ example pairs from training & many-shot prompting with the same data; non-monotone in $n$ is expected \\
+B2 & retrieval-augmented ICL, 20 nearest training contexts by bge-m3 & retrieval alternative \\
+B3 & best-of-8 on SFT with the training ruler & ruler-only improvement, no preference training \\
+SFT-$m$ & LoRA SFT on nested subsets $m \in \{100, 250, 500, \text{all}\}$, base and instruct & data-size curve; base vs instruct \\
+SFT+DPO & \S\ref{sec:pref} on the better checkpoint, all data & main system \\
+C-real / C-shuf / C-S / C-base & controls (\S\ref{sec:eval}) & define the axes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Ablations.}
+% NOTE: the draft's last ablation said "(to show over-optimisation)"; rephrased so the outcome is not presupposed.
+The ablations use the best checkpoint, all data and 3 seeds: LoRA on attention projections only; a 3-hour segment gap; recency weighting (2026 samples $\times 2$); pairs without behaviour cells; no score cap; no real-reply fallback; and DPO with the training ruler used also for early stopping (to test for over-optimisation).
+
+\paragraph{Pre-registered hypotheses.}
+\begin{description}
+\item[H1:] SFT-all beats each prompting system on D-AUC$_1$, NLL and the band count.
+\item[H2:] The data-size curve is monotone from 100 to all on NLL but flattens on D-AUC (the discriminator saturates).
+\item[H3:] SFT+DPO improves D-AUC$_{10}$ and band count over SFT-all without lowering the on-topic rate or diversity by more than 10\%.
+\item[H4:] The base checkpoint yields higher diversity and lower D-AUC than instruct at equal data; the instruct checkpoint yields a higher on-topic rate.
+\item[H5:] Removing the score cap or the behaviour cells raises the training score but worsens the band count and diversity (Goodhart).
+\item[H6:] The blind accuracy of T on SFT+DPO is below that on the best prompting system.
+\end{description}
+
+\paragraph{Compute.}
+% NOTE: handover.md §4 item 11 estimates 5--15 minutes for a full 3-epoch SFT run (10.1 GB VRAM, about 1 s/step);
+% the 10--20 minutes below is the draft's estimate. Both are replaced by measured times.
+Tier~1 uses one RTX 4070 Ti SUPER (16 GB).
+We plan 24 SFT runs at an estimated 10--20 minutes each \tbd{measured SFT run time}, candidate generation of about 5,600 samples, and DPO runs of under an hour each \tbd{measured DPO run time}.
+The whole tier is estimated to fit in a few GPU-days.
+
+\paragraph{Expected outcome against prior work.}
+% NOTE: the draft says Tier 1's contribution is "the validated-ruler methodology", while the main claim (main.tex
+% comment) says the rulers are "an intermediate step, not the contribution"; the two should be reconciled.
+IMPersona reports a 25\% pass rate against acquaintances with 500 private messages and 44\% with 13K \citep{shi2025impersona}.
+Our 700 turns sit at the low end, so Tier~1 is expected to show a gap from ``indistinguishable'' on the human line while beating prompting on each automatic line.
+The contribution of Tier~1 is the validated-ruler methodology and the data-size and base-vs-instruct curves for Traditional-Chinese short messages, which we did not find in the literature.
+
+\subsection{Tier 2: planned (generalisation)}
+\label{sec:tier2}
+% 中文要點:
+% 多人同意資料、多作者參照、變異數分解、公開語料只做尺的跨作者驗證、熟人盲測、貼圖編號。
+
+\begin{itemize}
+\item \textbf{Multiple consenting participants} (target 5--10, each with at least 500 turns, with partner identifiers in the context), to test whether the rulers' validity checks and the acceptance lines transfer across people, and whether group pre-adaptation followed by per-person LoRA, as in the personalised setting of \citet{ntt2024}, helps at this data size.
+\item \textbf{Multi-author reference} for Cosine Delta and a generalisability-theory decomposition of feature variance into person $\times$ period $\times$ topic \citep{cronbach1972dependability}, which turns the validity check from pass/fail into an estimate of how many turns are needed.
+\item \textbf{Public Taiwanese short-text corpora} (PTT comments, Dcard replies) for cross-author ruler validation only; they are not private messages and cannot replace Tier~1 data.
+\item \textbf{Acquaintance blind tests} in place of self-judgement, following the IMPersona protocol \citep{shi2025impersona}, with a sequential stopping rule (\S\ref{sec:eval}).
+\item \textbf{Sticker identity} once an export format with sticker ids is available.
+\end{itemize}
+
+\subsection{Baselines from the literature and why they are not directly comparable}
+\label{sec:litbaselines}
+% 中文要點:
+% 最近的四個方法都沒有繁中短訊、單人幾百則、驗證過的尺;所以重現它們的訓練配方當基準線,不比論文數字。
+% (英文正文改成「我們在這些論文裡沒找到」,不寫 None。)
+
+IMPersona \citep{shi2025impersona} (Llama-3.1-8B, English iMessage, acquaintance Turing test), DITTO \citep{shaikh2025ditto} and DIAL \citep{zhu2025dial} (English, population-level or demonstration-level) and Flipping the Dialogue \citep{naous2026flipping} (user-simulator LMs) are the closest methods we found.
+In these papers we did not find Traditional-Chinese short-message results, a single person at the few-hundred-turn scale, or rulers validated on the target pair.
+We therefore reimplement their \emph{training recipes} as baselines (SFT with the IMPersona hyperparameters; DITTO pairs with the real reply as chosen; DIAL-style discriminator-ranked pairs without cells or cap) rather than comparing against their published numbers.
+
+\section{Limitations}
+\label{sec:limitations}
+% 中文要點:
+% 單人單對象、測試集小、過濾規則拿掉部分風格線索、對照作者只有一位、本人自判、實驗 4 未獨立重算。
+% (更正 2026-10-17:單類別偵測器和負向選擇只能當類比,方法要引單類別分類文獻,出處待查。)
+
+\begin{itemize}
+\item There is one target person and one partner in Tier~1; partner accommodation effects (emoji and style converging to the interlocutor; \citealp{marko2022depends}) cannot be separated from T's style.
+\item The held-out period is 126 turns; intervals are wide and all comparisons are paired.
+\item The symbol filter removes 18\% of T's turns and 13.5\% of S's.
+The turns flagged only by brackets or slashes are symmetric (about 31 per person), and the half-width punctuation cue from our analysis of 2026-10-03 turned out to be mostly a code artefact (on the filtered chat it is weak: bag-level AUC 0.68).
+% NOTE (更正 2026-10-17, PROBLEMS_AND_SOLUTIONS.md S16): the draft cited Forrest et al. 1994 (negative selection) for the
+% one-class detector. Negative selection generates random detectors and deletes those that match self samples; a
+% one-class model of T shares only the use of self samples. Cited here as an analogy; the method needs a one-class reference.
+\item The author LM is fitted with S as the only contrast author.
+A one-class detector trained on T alone is planned but not validated.
+Negative selection \citep{forrest1994self} is only an analogy for it: both need samples of ``self'' alone, but negative selection generates random detectors and deletes those that match self, which the planned detector does not do; \tbd{reference for one-class classification}.
+\item Self-judgement by T is weaker evidence than judgement by acquaintances.
+\item Exp.~4 (the filter decision) is a single run without independent reimplementation.
+\end{itemize}

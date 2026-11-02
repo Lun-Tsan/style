@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -17,6 +18,15 @@ _loc = json.load(open(_LOCAL, encoding="utf-8")) if _LOCAL.exists() else {}
 CHAT_PATH = Path(_loc.get("chat_path", str(PROJECT / "chathistory.txt")))
 TARGET = _loc.get("target", "T")      # T: the person to imitate
 PARTNER = _loc.get("partner", "S")    # S: contrast author for the rulers (consent needed before publication)
+
+# synthetic mode (PERSONA_SYNTH=1): the fake export of persona/synth.py with fake names; every output goes under
+# runs/synth/ so the real reports/ and runs/ are never overwritten
+SYNTH = os.environ.get("PERSONA_SYNTH") == "1"
+if SYNTH:
+    RUNS = PROJECT / "runs" / "synth"
+    REPORTS = RUNS / "reports"
+    CHAT_PATH = RUNS / "chathistory_synth.txt"
+    TARGET, PARTNER = "林老師 Lin", "小陳"
 SPEAKERS = (PARTNER, TARGET)
 CODE = {TARGET: "T", PARTNER: "S"}    # role codes used in every report (never the display names)
 ROLE = {TARGET: "我", PARTNER: "對方"}
@@ -59,7 +69,31 @@ LORA = dict(r=8, alpha=16, dropout=0.05,
 LORA_ATTN_ONLY = ("q_proj", "k_proj", "v_proj", "o_proj")
 SFT = dict(lr=1e-4, warmup=0.03, micro_batch=2, grad_accum=4, weight_decay=0.0,
            epochs={100: 5, 250: 4, 500: 3, None: 3})
-DECODE = dict(temperature=0.8, top_p=0.95, max_new_tokens=64, max_msgs=6)
+DECODE = dict(temperature=0.8, top_p=0.95, max_new_tokens=64, max_msgs=6,
+              token_budget=12000,   # generation: (prompts + 1) * (longest prompt + max_new_tokens) * n per batch; raise if VRAM allows
+              batch_size=16)        # generation: upper bound on prompts per batch
 DPO = dict(beta=0.1, lr=5e-6, epochs=1, n_cand=8, delta=math.log(3), cap_q=0.95, ditto_max=0.5,
-           copy_lcs=12, ontopic_q=0.90)
+           copy_lcs=12, ontopic_q=0.90,
+           eval_every=10,        # DPO: evaluate dev generations with the acceptance rulers every N optimizer steps
+           dev_eval_n=60)        # DPO: number of dev contexts generated at each evaluation
+SFT["retrain_full"] = True      # after dev selects the epoch count, retrain on train + dev for that many epochs (§2.5)
+
+# evaluation (§6.1) and human blind test (§6.2)
+EVAL = dict(rarefy_n=100,       # diversity (distinct-2, Hill-1) is computed on this many replies per system
+            boot_n=2000)        # paired bootstrap over test contexts (report.py)
+HUMAN = dict(max_n=100,
+             # kind A ("which one is mine?"): line 3 passes when accuracy <= p_line; Wald SPRT between p_low and
+             # p_high (indifference zone around the line), error rates alpha (wrongly "above") and beta (wrongly "below")
+             A=dict(p_line=0.65, p_low=0.55, p_high=0.75, alpha=0.05, beta=0.05),
+             # kind B ("which is more like me?", system vs baseline): passes when preference >= p_line
+             B=dict(p_line=0.60, p_low=0.50, p_high=0.70, alpha=0.05, beta=0.05))
 SEEDS = (0, 1, 2)
+
+# acceptance lines (PIPELINE_SPEC §6.3), registered in advance; after B0 / C-base are seen they may only be tightened.
+# Applied by report.acceptance() (lines 1-2) and report.lines_from_human() (line 3).
+LINES = dict(d_auc1=0.75, d_auc10=0.90,          # line 1: D-AUC_1 and D-AUC_10 at most these (+ paired bootstrap)
+             band_margin=1,                       # line 2: Band >= C-real Band - band_margin
+             diversity_ratio=0.80,                # line 2: distinct-2 and Hill-1 >= this share of C-real's
+             copy_max=0.02,                       # line 2: Copy at most this share (Leak: at most C-real's)
+             human_A=HUMAN["A"]["p_line"],        # line 3: kind-A accuracy at the stopping point at most this (0.65)
+             human_B=HUMAN["B"]["p_line"])        # line 3: kind-B preference over the best prompting system >= this (0.60)

@@ -3,6 +3,9 @@
 A "system output" is a list aligned with the test samples: [{sid, msgs: [str, ...]}]. Controls:
   C-real  = the real replies, C-shuf = real replies reassigned to other contexts (perfect style, wrong content),
   C-S     = the partner's real test turns (style negative control; discriminator only).
+A generated reply is symbol-like when flag_symbols.is_symbol_turn(reply_text(msgs)); such replies are outside the
+ruler population, as real symbol turns are (the data layer drops those from the targets), so the rulers skip them
+and their share is reported as symbol_share (CODE_REVIEW #3).
 Metrics that need a model (NLL, MMI) take `model, tok`; everything else is pure Python/numpy (+ bge-m3 for OnTopic).
 """
 from __future__ import annotations
@@ -13,7 +16,8 @@ from collections import Counter
 import numpy as np
 
 from . import config as C
-from .generate import CopyChecker, leak_chars, reply_text
+from .flag_symbols import is_symbol_turn
+from .text import CopyChecker, leak_chars, reply_text
 from .normalize import PH_LINE
 from .rulers import features as FE
 from .rulers.author_lm import NB
@@ -47,17 +51,15 @@ def texts_of(outputs):
 
 
 # ----------------------------------------------------------------------------- independent discriminator
-def discriminator(real_texts, gen_texts, k: int = C.K_ATTR, folds: int = 5, nbags: int = 150, seed: int = 0):
-    """Char n-gram NB trained real-vs-generated on the held-out period, out-of-fold. Folds are assigned per text
-    STRING (seeded hash), so an identical string can never be in a training fold and a test fold at the same time
-    (the shuffled-real control exposed that per-context folds let the NB memorise strings). Returns single-turn
-    AUC, bag AUC (k, bags of out-of-fold scores) and n. Empty texts (sticker-only replies) are skipped."""
+def discriminator_scores(real_texts, gen_texts, folds: int = 5, seed: int = 0):
+    """Out-of-fold margins log P(gen|x) - log P(real|x) (gen-likeness) of a char n-gram NB trained real-vs-generated
+    on the held-out period: (s_real, s_gen), numpy arrays over the non-empty texts in input order. Folds are assigned
+    per text STRING (seeded hash), so identical strings share a fold and a string is scored only by an NB trained
+    without it (the shuffled-real control exposed that per-context folds let the NB memorise strings). A fold whose
+    training part lacks one class keeps margin 0."""
     import zlib
     real = [t for t in real_texts if t]
     gen = [t for t in gen_texts if t]
-    n = min(len(real), len(gen))
-    if n < 2 * folds:
-        return {"auc1": math.nan, f"auc{k}": math.nan, "n": n}
     fold_of = lambda t: (zlib.crc32((str(seed) + t).encode("utf-8")) & 0xFFFFFFFF) % folds
     fr = np.array([fold_of(t) for t in real])
     fg = np.array([fold_of(t) for t in gen])
@@ -72,6 +74,18 @@ def discriminator(real_texts, gen_texts, k: int = C.K_ATTR, folds: int = 5, nbag
             s_real[i] = nb.margin(real[i])
         for i in np.where(fg == f)[0]:
             s_gen[i] = nb.margin(gen[i])
+    return s_real, s_gen
+
+
+def discriminator(real_texts, gen_texts, k: int = C.K_ATTR, folds: int = 5, nbags: int = 150, seed: int = 0):
+    """Single-turn AUC, bag AUC (k, bags of the out-of-fold scores of discriminator_scores) and n. Empty texts
+    (sticker-only replies) are skipped."""
+    real = [t for t in real_texts if t]
+    gen = [t for t in gen_texts if t]
+    n = min(len(real), len(gen))
+    if n < 2 * folds:
+        return {"auc1": math.nan, f"auc{k}": math.nan, "n": n}
+    s_real, s_gen = discriminator_scores(real, gen, folds, seed)
     a1 = auc(np.concatenate([s_gen, s_real]), np.array([1] * len(gen) + [0] * len(real)))
     rng = np.random.default_rng(seed)
     kk = min(k, len(real), len(gen))
@@ -166,9 +180,10 @@ def leak_rate(gen_texts):
 
 def diversity(outputs, n_rarefy: int | None = None, seed: int = 0):
     """distinct-2 over character bigrams of all replies; Hill number of order 1 (exp Shannon entropy) of reply
-    strings; both after rarefaction to n_rarefy replies."""
+    strings; both after rarefaction to n_rarefy replies. The subset is drawn from the sorted replies, so the value
+    depends on the multiset of replies and not on their order (C-shuf = C-real reordered gets the same value)."""
     rng = np.random.default_rng(seed)
-    reps = ["\n".join(o["msgs"]) for o in outputs if o["msgs"]]
+    reps = sorted("\n".join(o["msgs"]) for o in outputs if o["msgs"])
     if n_rarefy and len(reps) > n_rarefy:
         reps = [reps[i] for i in rng.choice(len(reps), n_rarefy, replace=False)]
     big = Counter(r[i:i + 2] for r in reps for i in range(len(r) - 1))
@@ -203,39 +218,61 @@ def mmi(model, tok, samples, outputs, batch_size: int = 4):
 
 # ----------------------------------------------------------------------------- the evaluation bundle
 class Evaluator:
-    """Holds everything that is fixed across systems: test samples, real replies, partner texts, NCD reference,
-    feature bands, copy checker, bge threshold."""
+    """Holds everything that is fixed across systems: test samples, real replies, partner outputs (C-S), NCD
+    reference, feature bands, copy checker, bge threshold."""
 
     def __init__(self, test_samples, train_turns, test_partner_turns, bands, bge=None, ontopic_thr=None):
         self.samples = test_samples
         self.real = real_outputs(test_samples)
         self.real_texts = texts_of(self.real)
-        self.partner_texts = [t.ruler_text for t in test_partner_turns if t.ruler_text and not t.symbol]
+        # C-S built like C-real, from the messages (not ruler_text, which joins a turn into one message and replaces
+        # emoticons): burst, length, particle and emoticon features then see the turns as sent (CODE_REVIEW #11).
+        # Sticker-only turns stay in, as sticker-only replies do in C-real; symbol turns stay out.
+        partner = [t for t in test_partner_turns if not t.symbol]
+        self.partner_outputs = [{"sid": i, "msgs": [PH_LINE.get(m.strip(), m) for m in t.msgs]}
+                                for i, t in enumerate(partner)]
+        self.partner_texts = texts_of(self.partner_outputs)
         tr = [t for t in train_turns if t.ruler_text and not t.symbol]
         self.ncd_ref = NCDRef([t.ruler_text for t in tr], [t.who for t in tr])
         self.bands = bands
         self.copy = CopyChecker([t.ruler_text for t in tr if t.who == C.TARGET])
         self.bge, self.thr = bge, ontopic_thr
         self._real_ncd = ncd_delta(self.real_texts, self.ncd_ref)
-        self._sens = discriminator(self.real_texts, self.partner_texts[:len(self.real_texts)])
+        self._sens = discriminator(self.real_texts, [t for t in self.partner_texts if t][:len(self.real_texts)])
         self._floor = discriminator_floor(self.real_texts)
 
-    def evaluate(self, outputs, model=None, tok=None, base_model=None, n_rarefy=None):
-        gen_texts = texts_of(outputs)
+    def evaluate(self, outputs, model=None, tok=None, base_model=None, n_rarefy=C.EVAL["rarefy_n"]):
+        all_texts = texts_of(outputs)
+        # symbol-like replies leave the ruler population (discriminator, NCD, copy, leak, on-topic, bands, JSD,
+        # diversity, MMI; contract d); an acceptance threshold for symbol_share itself is an open decision (not
+        # registered in PIPELINE_SPEC §6.3)
+        sym = [is_symbol_turn(t) for t in all_texts]
+        kept = [o for o, s in zip(outputs, sym) if not s]
+        gen_texts = texts_of(kept)
         d = discriminator(self.real_texts, gen_texts)
-        m = {"n": len(outputs), "d_auc1": d["auc1"], f"d_auc{C.K_ATTR}": d[f"auc{C.K_ATTR}"], "d_n": d["n"],
+        m = {"n": len(outputs), "symbol_share": float(np.mean(sym)) if sym else math.nan,
+             "d_auc1": d["auc1"], f"d_auc{C.K_ATTR}": d[f"auc{C.K_ATTR}"], "d_n": d["n"],
              "floor_auc1": self._floor["auc1"], f"floor_auc{C.K_ATTR}": self._floor[f"auc{C.K_ATTR}"],
              "sens_auc1": self._sens["auc1"], f"sens_auc{C.K_ATTR}": self._sens[f"auc{C.K_ATTR}"],
              "ncd_delta": ncd_delta(gen_texts, self.ncd_ref) - self._real_ncd,
-             "feature_jsd": feature_jsd(outputs, self.real),
+             "feature_jsd": feature_jsd(kept, self.real),
              "copy_rate": copy_rate(gen_texts, self.copy), "leak_per_100": leak_rate(gen_texts),
-             "sticker_only_share": float(np.mean([not g for g in gen_texts])) if gen_texts else math.nan}
-        m.update(band_metrics(outputs, self.bands))
-        m.update({"div_" + k: v for k, v in diversity(outputs, n_rarefy).items()})
+             "sticker_only_share": float(np.mean([not g for g in all_texts])) if all_texts else math.nan}
+        m.update(band_metrics(kept, self.bands))
+        div = diversity(kept, n_rarefy)
+        m.update({"div_" + k: v for k, v in div.items()})
+        # §6.1 compares diversity at the same n, and Hill-1 rises with n: a system that keeps fewer than n_rarefy
+        # replies (symbol-like and empty ones dropped) is compared with C-real rarefied to its own div_n
+        ref = diversity(self.real, div["n"]) if div["n"] else None
+        for k in ("distinct2", "hill1"):
+            m[f"div_{k}_ratio"] = div[k] / ref[k] if ref and ref["n"] == div["n"] and ref[k] else math.nan
         if self.bge is not None and self.thr is not None:
-            m["ontopic"] = ontopic_rate(gen_texts, self.real_texts, self.bge, self.thr)
+            # pairs stay aligned with the test contexts; ontopic_rate skips a pair whose reply text is empty
+            m["ontopic"] = ontopic_rate(["" if s else g for g, s in zip(all_texts, sym)], self.real_texts, self.bge,
+                                        self.thr)
         if model is not None and tok is not None:
-            m["nll"] = model_nll(model, tok, self.samples, outputs)
+            # §6.1: NLL of the REAL test replies under the model, not of the system's own outputs (CODE_REVIEW #1)
+            m["nll"] = model_nll(model, tok, self.samples, self.real)
         if base_model is not None and tok is not None:
-            m["mmi"] = mmi(base_model, tok, self.samples, outputs)
+            m["mmi"] = mmi(base_model, tok, [s for s, k in zip(self.samples, sym) if not k], kept)
         return m
