@@ -1,4 +1,4 @@
-"""Stage 1: data layer + ruler validation + feature bands -> reports/ (PIPELINE_SPEC.md §7 step 1-2).
+"""Stage 1: data layer + ruler validation + feature bands + data manifest -> reports/ (PIPELINE_SPEC.md §7 step 1-2).
 
     python -m persona.stage1              # v1 rule (emoticon whitelist), full reports
     python -m persona.stage1 --reproduce  # experiment-4 loose rule on raw text_b; compares with the known numbers
@@ -15,7 +15,7 @@ import numpy as np
 
 from . import config as C
 from . import samples as SM, split as SP, turns as TU
-from .data import load_all as load_all_data
+from .data import MANIFEST, load_all as load_all_data, manifest as data_manifest
 from .flag_symbols import flag_raw
 from .rulers import features as FE, validate as V
 from .rulers.calibrate import Calibrator
@@ -37,7 +37,9 @@ def main(argv=None):
     ap.add_argument("--quick", action="store_true")
     a = ap.parse_args(argv)
     t0 = time.perf_counter()
-    msgs, n_sys, turns, segs = load_all()
+    # stage 1 writes the data manifest, so the full run loads without checking it; --reproduce writes no manifest
+    # and is held to the existing one
+    msgs, n_sys, turns, segs = load_all(check_manifest=a.reproduce)
     print(f"messages {len(msgs)} (system lines {n_sys}); turns {len(turns)}; segments {len(segs)}; "
           f"text-turn counts {TU.counts(turns)}")
     sizes = dict(nbag=60, noof=20, nboot=0, e4_reps=200) if a.quick else {}
@@ -80,9 +82,11 @@ def main(argv=None):
           C.REPORTS / "nb_calibration.json")
     print("NB calibration (OOF train):", {k: round(v, 3) for k, v in cal.fit_stats.items()})
 
-    # ---- interpretable features: bands, discrimination, control chart (ruler population = non-symbol train turns)
-    trT = [t for t in turns if t.split == "train" and t.who == C.TARGET and t.ruler_text and not t.symbol]
-    trS = [t for t in turns if t.split == "train" and t.who == C.PARTNER and t.ruler_text and not t.symbol]
+    # ---- interpretable features: bands, discrimination, control chart on the non-symbol train turns INCLUDING
+    # sticker-only ones (ruler_text None), the population the acceptance bags have (evaluate.band_metrics keeps
+    # sticker-only replies; CODE_REVIEW #4). The NB / profile / NCD rulers above keep the text-only population.
+    trT = [t for t in turns if t.split == "train" and t.who == C.TARGET and not t.symbol]
+    trS = [t for t in turns if t.split == "train" and t.who == C.PARTNER and not t.symbol]
     nb_bags = 200 if a.quick else C.BAND_BAGS
     bands = FE.fit_bands(trT, n=nb_bags)
     disc = FE.discrimination(trT, trS, n=100 if a.quick else 500)
@@ -93,6 +97,8 @@ def main(argv=None):
     print("features weighted:", [f for f in FE.FEATURES if disc[f]["weighted"]])
     print("features not weighted (disc < %.2f):" % C.FEATURE_MIN_AUC, [f for f in FE.FEATURES if not disc[f]["weighted"]])
     print("out-of-control blocks:", {b: v["out_of_control"] for b, v in chart.items() if v["out_of_control"]})
+    # written last, after the reports made from these data; data.load_all compares later runs with it
+    _dump(data_manifest(turns, segs), C.REPORTS / MANIFEST)
     print(f"done in {time.perf_counter() - t0:.0f} s -> {C.REPORTS}")
 
 

@@ -5,10 +5,14 @@
     python -m persona.run_eval --system baseline --kind zero          # B0
     python -m persona.run_eval --system baseline --kind many --shots 50
     python -m persona.run_eval --system baseline --kind retrieval --shots 20
-    python -m persona.run_eval --system sft --run sft_instruct_all_s0 [--dpo dpo_instruct_s0]
-    options: --seed, --quick (0.8B, 12 contexts), --no-bge (skip on-topic), --mmi (coherence under the untrained model)
+    python -m persona.run_eval --system sft --run sft_instruct_all_s0 [--dpo dpo_sft_instruct_all_s0_pairs_sft_instruct_all_s0_s0_s0]
+    options: --seed, --quick (0.8B, 12 contexts), --no-bge (skip on-topic), --mmi (coherence under the untrained model),
+             --overwrite (replace an existing runs/eval_<name>/)
 
 Outputs runs/eval_<name>/outputs.jsonl + metrics.json; reports/eval_table.json accumulates one row per name.
+Names carry the model key: untrained_<model>_s<seed> (--system base), B-<kind>[-<shots>]_<model>_s<seed> (baselines);
+sft runs keep <run>[+<dpo>]_s<seed>; --quick appends _quick. An existing non-empty runs/eval_<name>/ is refused
+unless --overwrite (checked before any model is loaded).
 """
 from __future__ import annotations
 
@@ -23,24 +27,30 @@ from . import config as C
 from . import evaluate as EV
 from . import modeling as MD
 from . import samples as SM, split as SP
+from .flag_symbols import is_symbol_turn
 from .generate import generate_replies
 from .data import load_all
 
 
-def build_evaluator(turns, test, use_bge=True, log=print):
+def build_evaluator(turns, test, use_bge=True, log=print, train_samples=None):
+    """train_samples: training-period samples for the on-topic threshold (CODE_REVIEW #12: fitted on training
+    replies, not on the test replies); rebuilt from `turns` when not given."""
     bands = json.load(open(C.REPORTS / "feature_bands.json", encoding="utf-8"))["bands"]
     tr = [t for t in turns if t.split == "train"]
     teS = [t for t in turns if t.split == "test" and t.who == C.PARTNER]
     bge = thr = None
     if use_bge:
-        from .embed import BGE
+        from .embed import BGE, fit_ontopic_threshold
+        if train_samples is None:
+            segs = {}
+            for t in turns:
+                segs.setdefault(t.seg, []).append(t)
+            train_samples = [s for s in SM.build_samples(list(segs.values())) if s.split == "train"]
         bge = BGE()
-    ev = EV.Evaluator(test, tr, teS, bands, bge, thr)
-    if use_bge:
-        from .embed import null_threshold
-        ev.thr = null_threshold(bge, [t for t in ev.real_texts if t])
-        log(f"on-topic threshold (null {C.DPO['ontopic_q']:.0%} quantile of cosine between unrelated real replies): {ev.thr:.3f}")
-    return ev
+        thr = fit_ontopic_threshold(bge, train_samples)
+        log(f"on-topic threshold (null {C.DPO['ontopic_q']:.0%} quantile of cosine between unrelated real training "
+            f"replies): {thr:.3f}")
+    return EV.Evaluator(test, tr, teS, bands, bge, thr)
 
 
 def load_system(model_key, run=None, dpo=None, quick=False):
@@ -55,8 +65,16 @@ def load_system(model_key, run=None, dpo=None, quick=False):
     return m, tok
 
 
-def save(name, outputs, metrics, extra=None):
+def out_dir(name, overwrite=False):
+    """runs/eval_<name>; refused when it exists and is not empty, unless overwrite (contract: no silent overwrite)."""
     out = C.RUNS / f"eval_{name}"
+    if not overwrite and out.is_dir() and any(out.iterdir()):
+        raise FileExistsError(f"{out} exists and is not empty; pass --overwrite to replace it")
+    return out
+
+
+def save(name, outputs, metrics, extra=None, overwrite=False):
+    out = out_dir(name, overwrite)
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "outputs.jsonl", "w", encoding="utf-8") as f:
         for o in outputs:
@@ -84,22 +102,33 @@ def main(argv=None):
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--no-bge", action="store_true")
     ap.add_argument("--mmi", action="store_true")
+    ap.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
     t0 = time.time()
+    sfx = "_quick" if a.quick else ""
+    if a.system == "controls":
+        names = [n + sfx for n in ("C-real", "C-shuf", "C-S")]
+    elif a.system == "base":
+        names = [(a.name or f"untrained_{a.model}_s{a.seed}") + sfx]
+    elif a.system == "sft":
+        names = [(a.name or f"{a.run}{'+' + a.dpo if a.dpo else ''}_s{a.seed}") + sfx]
+    else:
+        names = [(a.name or f"B-{a.kind}{('-' + str(a.shots)) if a.shots else ''}_{a.model}_s{a.seed}") + sfx]
+    for n in names:                      # refuse before the evaluator and the model are loaded
+        out_dir(n, a.overwrite)
     msgs, n_sys, turns, segs = load_all()
     smp = SM.build_samples(segs)
     test = [s for s in smp if s.split == "test"]
     train_all = [s for s in smp if s.split == "train"]
     if a.quick:
         test = test[:12]
-    ev = build_evaluator(turns, test, use_bge=not a.no_bge)
+    ev = build_evaluator(turns, test, use_bge=not a.no_bge, train_samples=train_all)
     print(f"evaluator ready ({len(test)} test contexts) in {time.time() - t0:.0f}s; floor AUC1 {ev._floor['auc1']:.3f}, "
           f"sensitivity AUC1 {ev._sens['auc1']:.3f}")
 
     if a.system == "controls":
-        for name, outs in (("C-real", ev.real), ("C-shuf", EV.shuffled_outputs(test, a.seed)),
-                           ("C-S", [{"sid": i, "msgs": [t]} for i, t in enumerate(ev.partner_texts[:len(test)])])):
-            m = save(name + ("_quick" if a.quick else ""), outs, ev.evaluate(outs))
+        for name, outs in zip(names, (ev.real, EV.shuffled_outputs(test, a.seed), ev.partner_outputs[:len(test)])):
+            m = save(name, outs, ev.evaluate(outs), overwrite=a.overwrite)
             print(name, {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.items()})
         return
 
@@ -108,7 +137,6 @@ def main(argv=None):
         model, tok = load_system(a.model, a.run if a.system == "sft" else None, a.dpo, a.quick)
         outs = generate_replies(model, tok, test, n=1, seed=a.seed)
         outs = [{"sid": o["sid"], "msgs": o["cands"][0]} for o in outs]
-        name = a.name or (f"{'base' if a.system == 'base' else a.run}{'+' + a.dpo if a.dpo else ''}_s{a.seed}")
         m = ev.evaluate(outs, model=model, tok=tok)
         extra.update({"run": a.run, "dpo": a.dpo})
     else:
@@ -119,16 +147,17 @@ def main(argv=None):
             from .embed import BGE
             bge = BGE()
         outs, info = B.run_baseline(model, tok, test, a.kind, train_samples=train_all, n_shots=a.shots, bge=bge, seed=a.seed)
-        name = a.name or f"B-{a.kind}{('-' + str(a.shots)) if a.shots else ''}_s{a.seed}"
         m = ev.evaluate(outs, model=None, tok=None)
         extra.update({"kind": a.kind, "shots": a.shots, **info})
     if a.mmi:
         del model
         torch.cuda.empty_cache()
         base, tok = load_system(a.model, None, None, a.quick)
-        m["mmi"] = EV.mmi(base, tok, test, outs)
-    name = name + ("_quick" if a.quick else "")
-    m = save(name, outs, m, extra)
+        # contract (d): symbol-like replies leave MMI as they leave the rulers of ev.evaluate (the same mask)
+        keep = [not is_symbol_turn(t) for t in EV.texts_of(outs)]
+        m["mmi"] = EV.mmi(base, tok, [s for s, k in zip(test, keep) if k], [o for o, k in zip(outs, keep) if k])
+    name = names[0]
+    m = save(name, outs, m, extra, overwrite=a.overwrite)
     print(name, {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.items() if k not in ("history",)})
     print(f"done in {time.time() - t0:.0f}s")
 
